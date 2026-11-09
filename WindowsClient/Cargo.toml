@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/sill-proto", "crates/sill-net"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+sill-proto = { path = "crates/sill-proto" }
+
+# PBKDF2 at 600,000 rounds is slow unoptimized; dependencies always build optimized.
+[profile.dev.package."*"]
+opt-level = 3

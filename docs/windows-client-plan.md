@@ -217,3 +217,12 @@ under it. One owner per file.
   CertificateUnknown after the handshake, as the spec said. Mac SPKI SHA-256
   4f29744e66655323cd29526c27fbde3d719931b71080504566d03ed3a719e229. Risks 1 and 2 closed.
 
+- 2026-11-09: UI toolkit changed from D1's Win32 + Direct2D to egui on winit + wgpu (Enrico: "winit
+  + wgpu, testable here"), so the real app runs and is screenshotted on this Linux machine under
+  Xvfb. Wave 1 (six workers, files owned one each): sill-media (FFmpeg 6–8 loaded at run time; the
+  real 10 s capture's 458 frames decode at 1512x982; the audio cookie is an MPEG-4 ES descriptor,
+  ELD 48 kHz stereo 480), playout (AudioPlayout port, cpal on Windows), controller and store (DPAPI
+  on Windows), discovery and rows, connect and pairing screen, stream screen and input (Ctrl → ⌘).
+  The app connected end to end to Enrico's Mac over Tailscale from the headless Linux build. Found
+  and fixed in the contract: a Mac whose own screen is locked has no cover (Switcher.swift:112-124).
+  FFmpeg for Windows pinned: BtbN autobuild-2026-11-08-12-35 n8.1.3 LGPL shared, sha256 f2ff0b57…

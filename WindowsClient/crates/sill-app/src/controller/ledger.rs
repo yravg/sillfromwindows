@@ -37,10 +37,6 @@ impl Ledger {
         self.problem = None;
     }
 
-    pub fn has_state(&self) -> bool {
-        self.state.is_some()
-    }
-
     /// A control's pick. Returns the change to send (with its token), or None when nothing goes:
     /// no state from the Mac yet, nothing changed, or it would change nothing of what is shown.
     pub fn pick(
@@ -98,10 +94,6 @@ impl Ledger {
             s.settings = p.change.applied(&s.settings);
         }
         Some(s)
-    }
-
-    pub fn state(&self) -> Option<&HostSettingsState> {
-        self.state.as_ref()
     }
 
     pub fn problem(&self) -> Option<&str> {

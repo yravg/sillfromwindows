@@ -12,7 +12,13 @@ pub fn start(case: &str) -> Handles {
         ..Default::default()
     };
     let video = crate::model::VideoSlot::default();
-    if !crate::ui::connect::mock_case(case, &mut model) {
+    if let Some(state) = crate::ui::settings::mock_state(case) {
+        // "settings-*": the stream screen's sample with these settings (open it with
+        // SILL_TEST_STREAM_OPEN=settings).
+        crate::ui::stream::mock_case("stream-desktop", &mut model, &video);
+        model.stream.settings_shown = crate::ui::settings::mock_shown(case);
+        model.stream.settings = Some(state);
+    } else if !crate::ui::connect::mock_case(case, &mut model) {
         crate::ui::stream::mock_case(case, &mut model, &video);
     }
     let (tx, rx) = std::sync::mpsc::channel::<Command>();

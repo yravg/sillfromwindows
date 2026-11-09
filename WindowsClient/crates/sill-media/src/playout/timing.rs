@@ -429,6 +429,16 @@ impl Timing {
         };
     }
 
+    /// The packet size, learned from the first full packet, without a new epoch.
+    pub fn set_frames_per_packet(&mut self, n: usize) {
+        self.frames_per_packet = n.max(1);
+    }
+
+    /// The priming the decoder dropped from the next segment's first packet, without a new epoch.
+    pub fn set_priming(&mut self, n: usize) {
+        self.priming_frames = n;
+    }
+
     pub fn rtt(&mut self, median: Option<f64>) {
         self.rtt_median = median.filter(|m| m.is_finite() && *m >= 0.0);
     }

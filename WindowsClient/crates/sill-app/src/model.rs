@@ -31,8 +31,6 @@ pub enum Command {
     },
     /// Pair with a `sill://pair…` link (pasted, or from the protocol handler).
     PairWithLink(String),
-    /// Ask a home-network Mac (row id) to show its code (kind 19 "ask").
-    AskToPair(String),
     /// Forget a saved Mac (its Mac ID).
     Forget(String),
     /// End the session; back to the connect screen.
@@ -56,8 +54,6 @@ pub enum Command {
     },
     /// Kind 17 (through the settings ledger).
     ChangeSettings(HostSettingsChange),
-    /// Kind 32: text from this PC's clipboard to the Mac.
-    SendClipboard(String),
     /// Kind 27 / 25: the Mac's menus.
     FetchMenu {
         id: String,
@@ -195,9 +191,9 @@ pub struct StreamModel {
     pub mac_key_repeat: bool,
     /// The Mac takes trackpad gestures (WindowList.gestures >= 1).
     pub mac_gestures: bool,
-    /// Diagnostics: decoded frames a second, frame age and round trip in ms.
+    /// Diagnostics: decoded frames a second and the round trip in ms (no frame age: the Mac's
+    /// clock is not this PC's).
     pub fps: f64,
-    pub frame_age_ms: f64,
     pub rtt_ms: f64,
 }
 

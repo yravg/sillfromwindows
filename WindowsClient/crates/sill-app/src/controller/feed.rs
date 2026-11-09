@@ -3,12 +3,32 @@
 //! pictures, so after one every delta is dropped until a keyframe has gone in, and the Mac is
 //! asked for one (kind 44, at most once a second: the host's own limit).
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use sill_proto::framing::ParameterSets;
 
+/// The least the queue holds: two frames.
 pub const QUEUE_FRAMES: usize = 2;
+/// The most it ever holds, however fast the decoder is.
+pub const QUEUE_MAX: usize = 8;
+/// What it holds before the decoder's speed is known.
+pub const QUEUE_START: usize = 4;
+/// How much backlog the queue may be: frames x decode time stay under this (milliseconds).
+const BACKLOG_MS: f64 = 100.0;
+
+/// How many frames the queue holds for a decoder that takes `decode_ms` a frame: a burst that
+/// arrives at once (the network delivers in batches) is kept while the decoder will catch up inside
+/// `BACKLOG_MS`, never fewer than two, never more than `QUEUE_MAX`. Unknown speed: `QUEUE_START`.
+pub fn capacity(decode_ms: Option<f64>) -> usize {
+    match decode_ms {
+        Some(ms) if ms.is_finite() => {
+            ((BACKLOG_MS / ms.max(1.0)) as usize).clamp(QUEUE_FRAMES, QUEUE_MAX)
+        }
+        _ => QUEUE_START,
+    }
+}
 const REQUEST_EVERY: Duration = Duration::from_secs(1);
 /// A keyframe that was asked for and did not come within this long is asked for again.
 const STILL_WAITING: Duration = Duration::from_secs(2);
@@ -32,18 +52,33 @@ struct State {
 
 /// Frames are bounded, control jobs (parameter sets, reset, stop) are never dropped and keep
 /// their order among the frames.
-#[derive(Default)]
 pub struct JobQueue {
     inner: Mutex<State>,
     cv: Condvar,
+    cap: AtomicUsize,
+}
+
+impl Default for JobQueue {
+    fn default() -> Self {
+        JobQueue {
+            inner: Default::default(),
+            cv: Default::default(),
+            cap: AtomicUsize::new(QUEUE_FRAMES),
+        }
+    }
 }
 
 impl JobQueue {
     pub fn has_room(&self) -> bool {
         self.inner
             .lock()
-            .map(|s| s.frames < QUEUE_FRAMES)
+            .map(|s| s.frames < self.cap.load(Ordering::Relaxed))
             .unwrap_or(false)
+    }
+
+    pub fn set_capacity(&self, frames: usize) {
+        self.cap
+            .store(frames.clamp(QUEUE_FRAMES, QUEUE_MAX), Ordering::Relaxed);
     }
 
     /// False (nothing queued) when two frames already wait.
@@ -51,7 +86,7 @@ impl JobQueue {
         let Ok(mut s) = self.inner.lock() else {
             return false;
         };
-        if s.frames >= QUEUE_FRAMES {
+        if s.frames >= self.cap.load(Ordering::Relaxed) {
             return false;
         }
         s.frames += 1;
@@ -118,10 +153,6 @@ impl FeedPolicy {
             waiting_since: Some(now),
             seen_frame: false,
         }
-    }
-
-    pub fn needs_keyframe(&self) -> bool {
-        self.need_key
     }
 
     /// The decoder failed, or new parameter sets arrived: the next keyframe is needed.
@@ -220,6 +251,28 @@ mod tests {
     }
 
     #[test]
+    fn the_queue_grows_with_a_fast_decoder_and_never_below_two() {
+        assert_eq!(capacity(None), 4);
+        assert_eq!(capacity(Some(56.0)), 2);
+        assert_eq!(capacity(Some(30.0)), 3);
+        assert_eq!(capacity(Some(10.0)), 8);
+        assert_eq!(capacity(Some(0.2)), 8);
+        assert_eq!(capacity(Some(500.0)), 2);
+        assert_eq!(capacity(Some(f64::NAN)), 4);
+        let q = JobQueue::default();
+        q.set_capacity(capacity(Some(25.0)));
+        for _ in 0..4 {
+            assert!(q.push_frame(vec![0], false));
+        }
+        assert!(!q.push_frame(vec![0], false));
+        q.set_capacity(1000);
+        for _ in 0..4 {
+            assert!(q.push_frame(vec![0], false));
+        }
+        assert!(!q.has_room());
+    }
+
+    #[test]
     fn reset_drops_frames_and_keeps_order_of_what_follows() {
         let q = JobQueue::default();
         q.push_frame(vec![1], true);
@@ -236,7 +289,7 @@ mod tests {
         // a delta before any keyframe is dropped
         assert!(!f.frame(false, true, at(10, t)).send);
         assert!(f.frame(true, true, at(20, t)).send);
-        assert!(!f.needs_keyframe());
+        assert!(!f.need_key);
         assert_eq!(
             f.frame(false, true, at(30, t)),
             FeedAction {
@@ -293,7 +346,7 @@ mod tests {
                 request_keyframe: true
             }
         );
-        assert!(f.needs_keyframe());
+        assert!(f.need_key);
     }
 
     #[test]

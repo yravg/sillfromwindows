@@ -579,3 +579,73 @@ fn playout_public_api_silent_sink() {
     p.stop();
     p.push(&sine(480, 0), 1.79e9 + 0.4, true);
 }
+
+// The decoder drops the segment's 240 priming frames: the first packet is short, and its size must
+// not set the epoch's; the next full packet does, with no new epoch and no join.
+#[test]
+fn short_first_packet_does_not_set_packet_size_or_new_epoch() {
+    let mut e = Engine::new();
+    e.timing.set_away(false);
+    let wall = 1.79e9;
+    let mut now = 0.0;
+    let mut buf = vec![0.0f32; 480 * 2];
+    e.push(&sine(240, 0), 2, wall, true, now);
+    assert_eq!(
+        e.timing.frames_per_packet(),
+        480,
+        "a short first packet leaves the size alone"
+    );
+    now += 0.010;
+    for k in 1..60usize {
+        e.push(&sine(480, k * 480), 2, wall + k as f64 * 0.01, false, now);
+        e.render(&mut buf, 2, 48_000, now, 0.010);
+        now += 0.010;
+    }
+    assert_eq!(
+        e.timing.epoch(),
+        Some(1),
+        "no new epoch at the second packet"
+    );
+    assert_eq!(e.timing.frames_per_packet(), 480);
+    let s = e.timing.take_second(now);
+    assert_eq!(s.joins, 0, "the second packet follows the first");
+    assert!(s.placed >= 50, "placed {}", s.placed);
+}
+
+// The size comes from the next full packet, whatever it is (512 here), still one epoch.
+#[test]
+fn next_full_packet_sets_the_size() {
+    let mut e = Engine::new();
+    e.push(&sine(256, 0), 2, 1.79e9, true, 0.0);
+    e.push(&sine(512, 0), 2, 1.79e9 + 512.0 / 48_000.0, false, 0.011);
+    assert_eq!(e.timing.frames_per_packet(), 512);
+    assert_eq!(e.timing.epoch(), Some(1));
+    // A later segment's short first packet again leaves it.
+    e.push(&sine(256, 0), 2, 1.79e9 + 1.0, true, 1.0);
+    assert_eq!(e.timing.frames_per_packet(), 512);
+    assert_eq!(e.timing.epoch(), Some(1));
+}
+
+// The segment's first stamp is the Mac's first sample's: the kept frames begin 240/48000 s later.
+#[test]
+fn kept_frames_begin_after_the_priming() {
+    let mut m = fresh(1, 480, 240);
+    m.latency(0.010, 0.005, 1.0 / 60.0, 60.0);
+    m.played(0.0, 100.0, 100.0);
+    let p = pk(&mut m, 0, 99.990, true, 100.0);
+    assert_eq!(p.drop_front, 240);
+    let q = pk(&mut m, 1, 99.990 + 0.010, false, 100.010);
+    let tail = q.output.schedules.iter().find(|s| s.seq == 0);
+    if let Some(t) = tail {
+        assert!(
+            near(t.stamp, 99.990 + 240.0 / 48_000.0, 1e-9),
+            "stamp {}",
+            t.stamp
+        );
+    } else {
+        assert!(
+            !q.output.discards.is_empty(),
+            "late is the only other outcome"
+        );
+    }
+}

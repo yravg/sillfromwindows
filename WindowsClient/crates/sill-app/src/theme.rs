@@ -23,6 +23,7 @@ pub const RADIUS: u8 = 10;
 pub const MIN_TARGET: f32 = 32.0;
 
 pub fn apply(ctx: &egui::Context) {
+    add_symbol_fallback(ctx);
     // Sill is dark-only, as the iOS stream screen (Palette): one theme, whatever Windows says.
     ctx.set_theme(egui::Theme::Dark);
     ctx.all_styles_mut(|s| {
@@ -36,9 +37,43 @@ pub fn apply(ctx: &egui::Context) {
         v.selection.stroke.color = ACCENT;
         v.widgets.inactive.weak_bg_fill = CONTROL;
         v.widgets.inactive.bg_fill = CONTROL;
+        // Unchecked boxes and fields need an edge on PANEL (MUTED at 1 pt).
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, MUTED);
         v.widgets.hovered.weak_bg_fill = CONTROL_OPEN;
         v.widgets.active.weak_bg_fill = CONTROL_OPEN;
         s.spacing.item_spacing = egui::vec2(GAP, GAP);
         s.spacing.interact_size.y = MIN_TARGET;
     });
+}
+
+/// egui's own fonts lack the Mac's key symbols (⌘ ⌥ ⇧ ⌃ ⎋ ✓). Add the system's symbol font as a
+/// fallback, read at run time and never shipped: Segoe UI Symbol on Windows, DejaVu Sans on Linux.
+fn add_symbol_fallback(ctx: &egui::Context) {
+    let candidates: &[&str] = if cfg!(windows) {
+        &[
+            r"C:\Windows\Fonts\seguisym.ttf",
+            r"C:\Windows\Fonts\segoeui.ttf",
+        ]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+    };
+    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+        return;
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "symbols".into(),
+        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("symbols".into());
+    }
+    ctx.set_fonts(fonts);
 }

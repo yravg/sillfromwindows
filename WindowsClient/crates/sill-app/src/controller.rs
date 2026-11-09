@@ -28,6 +28,7 @@ use sill_proto::small::{Clipboard, MacPointer, TrackpadGesture};
 use sill_proto::switcher::{AppInfo, LaunchApp, StreamSource, WindowCommand, WindowList};
 use sill_proto::{wire, Message, MessageKind};
 
+use crate::clipboard;
 use crate::discovery::Discovery;
 use crate::model::*;
 use crate::store::Store;
@@ -68,6 +69,15 @@ pub struct Counters {
     pub keyframe_requests: AtomicU64,
     pub audio_packets: AtomicU64,
     pub window_lists: AtomicU64,
+    pub clip_sent: AtomicU64,
+    pub clip_received: AtomicU64,
+    /// Frames dropped because the decoder's queue held two already.
+    pub dropped_full: AtomicU64,
+    /// Frames dropped while a keyframe was awaited (a chain broken, or none yet).
+    pub dropped_waiting: AtomicU64,
+    /// Decode time of the frames decoded, microseconds, and the slowest.
+    pub decode_micros: AtomicU64,
+    pub decode_max_micros: AtomicU64,
 }
 
 pub fn start(waker: Waker) -> Handles {
@@ -156,6 +166,17 @@ struct ImageJob {
     bytes: Vec<u8>,
 }
 
+/// TEST ONLY: `SILL_FEED_TRACE=1` prints every frame and what the feed did with it.
+fn feed_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SILL_FEED_TRACE").is_some())
+}
+
+fn trace_clock() -> f64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
 static PICTURE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 const IDLE_STATUS: &str = "Looking for Macs on this network";
@@ -203,7 +224,14 @@ fn decode_thread(
             }
             Job::Frame { avcc, keyframe } => {
                 let Some(d) = decoder.as_mut() else { continue };
-                match d.decode(&avcc, keyframe) {
+                let started = Instant::now();
+                let result = d.decode(&avcc, keyframe);
+                let micros = started.elapsed().as_micros() as u64;
+                counters.decode_micros.fetch_add(micros, Ordering::Relaxed);
+                counters
+                    .decode_max_micros
+                    .fetch_max(micros, Ordering::Relaxed);
+                match result {
                     Ok(Some(f)) => {
                         serial += 1;
                         counters.frames_decoded.fetch_add(1, Ordering::Relaxed);
@@ -235,6 +263,10 @@ enum AudioJob {
     },
     Mute(bool),
     LagMs(f64),
+    /// The session runs through the remote door (away from home).
+    Away(bool),
+    /// A session ended: drop the decoder and the output.
+    Reset,
     Stop,
 }
 
@@ -244,6 +276,8 @@ fn audio_thread(rx: Receiver<AudioJob>, muted: bool) {
     let mut playout: Option<Playout> = None;
     let mut shape = (48_000u32, 2u16, 480i64);
     let mut warned = false;
+    let mut away = false;
+    let mut lag_ms: Option<f64> = None;
     for job in rx {
         match job {
             AudioJob::Stop => {
@@ -258,7 +292,21 @@ fn audio_thread(rx: Receiver<AudioJob>, muted: bool) {
                     p.set_muted(m);
                 }
             }
+            AudioJob::Away(a) => {
+                away = a;
+                if let Some(p) = playout.as_mut() {
+                    p.set_away(a);
+                }
+            }
+            AudioJob::Reset => {
+                if let Some(p) = playout.as_mut() {
+                    p.stop();
+                }
+                playout = None;
+                decoder = None;
+            }
             AudioJob::LagMs(ms) => {
+                lag_ms = Some(ms);
                 if let Some(p) = playout.as_mut() {
                     p.set_picture_lag_ms(ms);
                 }
@@ -283,6 +331,10 @@ fn audio_thread(rx: Receiver<AudioJob>, muted: bool) {
                     }
                     let mut p = Playout::new(rate, channels);
                     p.set_muted(muted);
+                    p.set_away(away);
+                    if let Some(ms) = lag_ms {
+                        p.set_picture_lag_ms(ms);
+                    }
                     playout = Some(p);
                 }
             }
@@ -345,7 +397,6 @@ struct Live {
     mac: SavedMac,
     feed: FeedPolicy,
     got_list: bool,
-    clip_subscribed: bool,
 }
 
 struct Reconnect {
@@ -389,8 +440,11 @@ struct Controller {
     user_chose: bool,
     last_auto_desktop: Option<Instant>,
     last_source: Option<StreamSource>,
-    last_from_mac_clip: Option<String>,
-    clipboard: Option<arboard::Clipboard>,
+    clip: clipboard::Sync,
+    host_clipboard: Option<i64>,
+    shade: Option<words::Shade>,
+    unlocking_since: Option<Instant>,
+    session_paired: Option<bool>,
     menu_tokens: HashMap<i64, String>,
     next_menu_token: i64,
     menu_version: Option<i64>,
@@ -403,6 +457,7 @@ struct Controller {
     image_tx: Sender<ImageJob>,
     last_rows: Vec<MacRow>,
     decoded_at_last_second: u64,
+    decode_micros_at_last_second: u64,
     last_second: Instant,
     resume_source: Option<StreamSource>,
     quitting: bool,
@@ -456,6 +511,7 @@ impl Controller {
             None => None,
         };
         let queue = Arc::new(JobQueue::default());
+        queue.set_capacity(feed::QUEUE_START);
         let flags = Arc::new(DecodeFlags::default());
         {
             let (q, v, w, c, f) = (
@@ -506,8 +562,11 @@ impl Controller {
             user_chose: false,
             last_auto_desktop: None,
             last_source: None,
-            last_from_mac_clip: None,
-            clipboard: None,
+            clip: clipboard::Sync::default(),
+            host_clipboard: None,
+            shade: None,
+            unlocking_since: None,
+            session_paired: None,
             menu_tokens: HashMap::new(),
             next_menu_token: 1,
             menu_version: None,
@@ -520,6 +579,7 @@ impl Controller {
             image_tx,
             last_rows: Vec::new(),
             decoded_at_last_second: 0,
+            decode_micros_at_last_second: 0,
             last_second: Instant::now(),
             resume_source: None,
             quitting: false,
@@ -597,7 +657,6 @@ impl Controller {
             Command::ConnectRemotely(row) => self.connect_row(&row, true),
             Command::PairWithCode { addr, code } => self.pair_code(&addr, &code),
             Command::PairWithLink(link) => self.pair_link(&link),
-            Command::AskToPair(row) => self.ask_row(&row),
             Command::Forget(id) => self.forget(&id),
             Command::Disconnect => self.disconnect(),
             Command::Pick(source) => {
@@ -642,7 +701,6 @@ impl Controller {
                     self.publish_ledger();
                 }
             }
-            Command::SendClipboard(text) => self.send_clipboard(text),
             Command::FetchMenu { id, title } => {
                 let token = self.menu_token(&id);
                 let m = FetchMenu {
@@ -716,26 +774,11 @@ impl Controller {
             }
             Preference::ShareClipboard(on) => {
                 self.prefs.share_clipboard = on;
-                let mac_clipboard = self
-                    .shared
-                    .lock()
-                    .map(|m| m.stream.mac_clipboard)
-                    .unwrap_or(false);
-                let mut send = None;
-                if let Some(l) = self.live.as_mut() {
-                    if on && mac_clipboard && !l.clip_subscribed {
-                        l.clip_subscribed = true;
-                        send = Some(Clipboard::default());
-                    } else if !on && l.clip_subscribed {
-                        l.clip_subscribed = false;
-                        send = Some(Clipboard {
-                            stop: Some(true),
-                            ..Default::default()
-                        });
-                    }
-                }
-                if let Some(c) = send {
-                    self.send(MessageKind::Clipboard, wire::encode(&c));
+                if let Some(c) =
+                    self.clip
+                        .sync_subscription(self.host_clipboard, on, Instant::now())
+                {
+                    self.send(MessageKind::Clipboard, c);
                 }
             }
             Preference::ReverseScrolling(v) => self.prefs.reverse_scrolling = v,
@@ -746,22 +789,6 @@ impl Controller {
         }
         let prefs = self.prefs.clone();
         self.update(|m| m.prefs = prefs);
-    }
-
-    fn send_clipboard(&mut self, text: String) {
-        let ok = self.prefs.share_clipboard
-            && self.live.as_ref().is_some_and(|l| l.clip_subscribed)
-            && text.len() <= Clipboard::MAX_TEXT_BYTES
-            && self.last_from_mac_clip.as_deref() != Some(text.as_str());
-        if ok {
-            self.send(
-                MessageKind::Clipboard,
-                wire::encode(&Clipboard {
-                    text: Some(text),
-                    ..Default::default()
-                }),
-            );
-        }
     }
 
     // --- rows, dialing, pairing -------------------------------------------------------------
@@ -876,7 +903,12 @@ impl Controller {
         }
         self.dialing = false;
         match d.result {
-            Ok((session, _target)) => self.begin_session(d.mac, session),
+            Ok((session, target)) => {
+                let found = self.discovery.found();
+                let home = targets::reconnect_targets(&d.mac, &found, false);
+                let _ = self.audio_tx.send(AudioJob::Away(!home.contains(&target)));
+                self.begin_session(d.mac, session)
+            }
             Err(e) => {
                 let words = words::dial_failure(&e, &d.mac.name);
                 if d.auto {
@@ -908,6 +940,9 @@ impl Controller {
         self.menu_version = None;
         let (name, resume) = (mac.name.clone(), resumed.as_ref().and_then(|r| r.resume));
         if resumed.is_none() {
+            self.shade = None;
+            self.session_paired = None;
+            self.host_clipboard = None;
             self.user_chose = false;
             self.last_source = None;
             self.last_auto_desktop = None;
@@ -934,7 +969,6 @@ impl Controller {
             mac,
             feed: FeedPolicy::new(now),
             got_list: false,
-            clip_subscribed: false,
         });
         self.resume_source = resume;
         self.send_viewport();
@@ -967,9 +1001,10 @@ impl Controller {
     }
 
     fn after_session_end(&mut self) {
+        self.clip.reset();
         self.queue.reset();
         self.ledger.reset();
-        let _ = self.audio_tx.send(AudioJob::Format(AudioFormat::default()));
+        let _ = self.audio_tx.send(AudioJob::Reset);
     }
 
     fn forget(&mut self, mac_id: &str) {
@@ -984,14 +1019,6 @@ impl Controller {
         self.macs.retain(|m| m.mac_id != mac_id);
         if let Some(s) = &self.store {
             let _ = s.save_macs(&self.macs);
-        }
-    }
-
-    fn ask_row(&mut self, row: &str) {
-        match targets::plan(row, &self.macs, &self.discovery.found(), false) {
-            Plan::Pair { name, target } => self.start_ask(name, target),
-            Plan::Dial { .. } => self.connect_row(row, false),
-            _ => self.connect_row(row, false),
         }
     }
 
@@ -1188,6 +1215,10 @@ impl Controller {
                     .map(|l| l.mac.name.clone())
                     .unwrap_or_default();
                 let line = s.link.as_ref().and_then(words::link_line);
+                if s.session_paired != self.session_paired {
+                    self.session_paired = s.session_paired;
+                    self.publish_cover();
+                }
                 self.ledger.on_state(s.clone(), &mac);
                 self.update(|m| {
                     m.stream.settings = Some(s);
@@ -1218,7 +1249,14 @@ impl Controller {
             .as_mut()
             .map(|x| !std::mem::replace(&mut x.got_list, true))
             .unwrap_or(false);
-        let locked = l.locked_why().map(|w| words::locked(w, &l.mac_name));
+        let why = l.locked_why();
+        let locked = why.map(|w| words::line(&l.mac_name, w));
+        let before = self.shade;
+        self.shade = words::shade_after_list(self.shade, why);
+        if self.shade == Some(words::Shade::Unlocking) && before != self.shade {
+            self.unlocking_since = Some(now);
+        }
+        let cover = self.cover_model(&l.mac_name);
         let mac_clipboard = l.clipboard.unwrap_or(0) >= 1;
         if let Some(s) = l.active.ne(&StreamSource::None).then_some(l.active) {
             self.last_source = Some(s);
@@ -1227,18 +1265,16 @@ impl Controller {
         if first {
             self.send(MessageKind::FetchMenu, wire::encode(&FetchMenu::default()));
         }
-        let mut subscribe = false;
-        if let Some(live) = self.live.as_mut() {
-            if mac_clipboard && self.prefs.share_clipboard && !live.clip_subscribed {
-                live.clip_subscribed = true;
-                subscribe = true;
-            }
-        }
-        if subscribe {
-            self.send(MessageKind::Clipboard, wire::encode(&Clipboard::default()));
+        self.host_clipboard = l.clipboard;
+        if let Some(c) = self
+            .clip
+            .sync_subscription(l.clipboard, self.prefs.share_clipboard, now)
+        {
+            self.send(MessageKind::Clipboard, c);
         }
         // what streams: the resumed source, else the Desktop (at most every 10 s) until a person chooses
-        if l.active == StreamSource::None && locked.is_none() {
+        if l.active == StreamSource::None && why != Some(sill_proto::switcher::LockedWhy::OtherUser)
+        {
             let pick = match self.resume_source.take() {
                 Some(s) => Some(s),
                 None if !self.user_chose
@@ -1265,6 +1301,7 @@ impl Controller {
             s.windows = l.windows.clone();
             s.active = Some(l.active);
             s.locked = locked;
+            s.cover = cover;
             s.mac_clipboard = mac_clipboard;
             s.mac_key_repeat = l.key_repeat.unwrap_or(0) >= 1;
             s.mac_gestures = l.gestures.unwrap_or(0) >= 1;
@@ -1308,6 +1345,23 @@ impl Controller {
         }
     }
 
+    fn cover_model(&self, mac: &str) -> Option<Cover> {
+        self.shade.map(|sh| Cover {
+            title: words::title(mac, sh),
+            detail: words::detail(sh, self.session_paired),
+        })
+    }
+
+    fn publish_cover(&self) {
+        let mac = self
+            .live
+            .as_ref()
+            .map(|l| l.mac.name.clone())
+            .unwrap_or_default();
+        let cover = self.cover_model(&mac);
+        self.update(|m| m.stream.cover = cover);
+    }
+
     fn publish_ledger(&self) {
         let (shown, problem) = (
             self.ledger.shown(),
@@ -1324,6 +1378,9 @@ impl Controller {
         match m.kind {
             MessageKind::ParameterSets => {
                 self.counters.sets_in.fetch_add(1, Ordering::Relaxed);
+                if feed_trace() {
+                    eprintln!("feed {:.3} sets {}B", trace_clock(), m.payload.len());
+                }
                 if let Some(sets) = ParameterSets::decode(&m.payload) {
                     self.queue.push_control(Job::Sets(sets));
                     if let Some(l) = self.live.as_mut() {
@@ -1339,16 +1396,40 @@ impl Controller {
                 if m.is_keyframe {
                     self.counters.keyframes_in.fetch_add(1, Ordering::Relaxed);
                 }
+                let shade = words::shade_after_frame(self.shade, m.is_keyframe);
+                if shade != self.shade {
+                    self.shade = shade;
+                    self.publish_cover();
+                }
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
-                let act = live.feed.frame(m.is_keyframe, self.queue.has_room(), now);
+                let room = self.queue.has_room();
+                let act = live.feed.frame(m.is_keyframe, room, now);
+                if feed_trace() {
+                    eprintln!(
+                        "feed {:.3} key={} {}B room={room} -> send={} ask={}",
+                        trace_clock(),
+                        m.is_keyframe,
+                        m.payload.len(),
+                        act.send,
+                        act.request_keyframe
+                    );
+                }
                 if act.send {
                     if !self.queue.push_frame(m.payload, m.is_keyframe) {
                         self.counters.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        self.counters.dropped_full.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     self.counters.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    if self.queue.has_room() {
+                        self.counters
+                            .dropped_waiting
+                            .fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        self.counters.dropped_full.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 if act.request_keyframe {
                     self.counters
@@ -1448,20 +1529,11 @@ impl Controller {
     }
 
     fn on_clipboard(&mut self, c: Clipboard) {
-        if !self.prefs.share_clipboard {
-            return;
-        }
-        let Some(text) = c.text else { return };
-        if text.len() > Clipboard::MAX_TEXT_BYTES {
-            return;
-        }
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        if let Some(cb) = self.clipboard.as_mut() {
-            if cb.set_text(text.clone()).is_ok() {
-                self.last_from_mac_clip = Some(text);
-            }
+        if self
+            .clip
+            .write_from_mac(&c, self.prefs.share_clipboard, self.host_clipboard)
+        {
+            self.counters.clip_received.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1484,6 +1556,7 @@ impl Controller {
 
     fn on_closed(&mut self, reason: CloseReason) {
         let Some(live) = self.live.take() else { return };
+        eprintln!("session: {} closed: {reason:?}", live.mac.name);
         self.after_session_end();
         if reason == CloseReason::Requested {
             return;
@@ -1546,13 +1619,25 @@ impl Controller {
             self.last_second = now;
             let decoded = self.counters.frames_decoded.load(Ordering::Relaxed);
             let fps = (decoded - self.decoded_at_last_second) as f64 / secs;
+            let micros = self.counters.decode_micros.load(Ordering::Relaxed);
+            let decode_ms = if decoded > self.decoded_at_last_second {
+                (micros - self.decode_micros_at_last_second) as f64
+                    / (decoded - self.decoded_at_last_second) as f64
+                    / 1000.0
+            } else {
+                0.0
+            };
+            self.decode_micros_at_last_second = micros;
+            if decoded > self.decoded_at_last_second {
+                self.queue.set_capacity(feed::capacity(Some(decode_ms)));
+            }
             self.decoded_at_last_second = decoded;
             if self.live.is_some() {
                 let (rtt, unavailable) = (
                     self.last_rtt_ms,
                     self.flags.unavailable.lock().ok().and_then(|u| u.clone()),
                 );
-                let _ = self.audio_tx.send(AudioJob::LagMs(rtt / 2.0));
+                let _ = self.audio_tx.send(AudioJob::LagMs(rtt / 2.0 + decode_ms));
                 self.worst_rtt_ms = 0.0;
                 self.update(|m| {
                     m.stream.fps = fps;
@@ -1561,6 +1646,21 @@ impl Controller {
                         m.stream.link_line = Some(format!("The picture can’t be decoded: {why}"));
                     }
                 });
+            }
+        }
+        if self.shade == Some(words::Shade::Unlocking)
+            && self
+                .unlocking_since
+                .is_some_and(|t| now.duration_since(t) >= words::UNLOCKING_TIMEOUT)
+        {
+            self.shade = None;
+            self.publish_cover();
+        }
+        if self.live.is_some() {
+            let on = self.prefs.share_clipboard;
+            if let Some(c) = self.clip.look(on, self.host_clipboard, now) {
+                self.counters.clip_sent.fetch_add(1, Ordering::Relaxed);
+                self.send(MessageKind::Clipboard, c);
             }
         }
         self.reconnect_tick(now);

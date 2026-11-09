@@ -11,12 +11,17 @@ use egui::{
 use egui_wgpu::wgpu;
 use sill_proto::switcher::{StreamSource, WindowAction, WindowInfo};
 
+use super::menus::{self, MenusUi};
+use super::settings::SettingsUi;
+
 use crate::input::{self, Cfg, InputState};
-use crate::model::{AppModel, Command, Picture, Screen, VideoFrame, VideoSlot};
+use crate::model::{AppModel, Command, Cover, Picture, Screen, VideoFrame, VideoSlot};
 use crate::theme;
 
 const DRAWER_WIDTH: f32 = 320.0;
-const SETTINGS_WIDTH: f32 = 340.0;
+const SETTINGS_WIDTH: f32 = 360.0;
+/// Aa's detents (TextScale.swift): Off, then 0.5× to 1.5× in quarter steps.
+const SCALES: [f64; 5] = [0.5, 0.75, 1.0, 1.25, 1.5];
 const BTN_W: f32 = 84.0;
 const THUMB_H: f32 = 40.0;
 const ROW_H: f32 = 44.0;
@@ -47,6 +52,15 @@ pub struct StreamUi {
     last_pass: Option<u64>,
     vp_sent: Option<Size2>,
     vp_candidate: Option<(Size2, f64)>,
+    settings_ui: SettingsUi,
+    menus: MenusUi,
+    /// Aa's scale (None = Off); kept across windows (TextScale: the value stays for the next).
+    aa: Option<f64>,
+    /// TEST ONLY: SILL_TEST_STREAM_OPEN=settings,drawer,menu,aa opens those at start.
+    test_open: Vec<String>,
+    drawer_focus: bool,
+    /// The picture's size in points, as last laid out.
+    panel: Size2,
 }
 
 type Size2 = (f32, f32);
@@ -54,19 +68,33 @@ type Size2 = (f32, f32);
 impl StreamUi {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // TEST ONLY: the drawer case opens the drawer, since a mock has no one to click Apps.
-        let drawer = std::env::var("SILL_TEST_MOCK").is_ok_and(|c| c == "stream-drawer");
+        let mut test_open: Vec<String> = std::env::var("SILL_TEST_STREAM_OPEN")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        if std::env::var("SILL_TEST_MOCK").is_ok_and(|c| c == "stream-drawer") {
+            test_open.push("drawer".into());
+        }
+        let drawer = test_open.iter().any(|o| o == "drawer");
         StreamUi {
             rs: cc.wgpu_render_state.clone(),
             video: None,
             textures: HashMap::new(),
             drawer,
-            settings: false,
+            settings: test_open.iter().any(|o| o == "settings"),
             search: String::new(),
             order: Vec::new(),
             input: InputState::default(),
             last_pass: None,
             vp_sent: None,
             vp_candidate: None,
+            settings_ui: SettingsUi::default(),
+            menus: MenusUi::default(),
+            aa: None,
+            drawer_focus: drawer,
+            panel: (0.0, 0.0),
+            test_open,
         }
     }
 
@@ -90,8 +118,6 @@ impl StreamUi {
         let thumbs = self.prepare_textures(&ctx, model);
         self.sync_order(&model.stream.windows);
 
-        let mut disconnect = false;
-
         egui::Panel::top("stream-bar")
             .exact_size(theme::BAR_HEIGHT)
             .show_separator_line(false)
@@ -102,68 +128,68 @@ impl StreamUi {
             )
             .show(ui, |ui| self.bar(ui, model, tx, &thumbs));
 
-        if self.drawer {
-            egui::Panel::left("stream-drawer")
-                .exact_size(DRAWER_WIDTH)
-                .resizable(false)
-                .show_separator_line(false)
-                .frame(
-                    egui::Frame::new()
-                        .fill(theme::PANEL)
-                        .inner_margin(egui::Margin::same(12)),
-                )
-                .show(ui, |ui| self.drawer_ui(ui, model, tx));
-        }
-
-        if self.settings {
-            egui::Panel::right("stream-settings")
-                .exact_size(SETTINGS_WIDTH)
-                .resizable(false)
-                .show_separator_line(false)
-                .frame(
-                    egui::Frame::new()
-                        .fill(theme::PANEL)
-                        .inner_margin(egui::Margin::same(12)),
-                )
-                .show(ui, |ui| {
-                    // TODO(lead): connect crate::ui::settings (worker U3) here: it draws the
-                    // Mac's settings, the clipboard and the menus; this placeholder only holds
-                    // the title, Done and Disconnect, which stay in the panel's foot.
-                    ui.label(
-                        RichText::new(format!("Settings for {}", model.stream.mac_name))
-                            .size(16.0)
-                            .strong(),
-                    );
-                    ui.add_space(theme::GAP);
-                    ui.label(
-                        RichText::new("(the Settings panel is drawn here by ui::settings)")
-                            .size(12.0)
-                            .color(theme::MUTED),
-                    );
-                    ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                        if wide_button(ui, "Disconnect", false).clicked() {
-                            disconnect = true;
-                        }
-                        if wide_button(ui, "Done", false).clicked() {
-                            self.settings = false;
-                        }
-                    });
-                });
-        }
+        // Below the bar: the picture, and over it (not beside it, so the viewport the Mac is told
+        // never changes) the Apps drawer and the Settings panel, as on iOS.
+        let rest = ui.available_rect_before_wrap();
+        self.overlays(&ctx, rest, model, tx);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(LETTERBOX))
             .show(ui, |ui| self.picture(ui, model, tx));
-
-        if disconnect {
-            self.release_all(tx);
-            let _ = tx.send(Command::Disconnect);
-        }
     }
 
-    fn release_all(&mut self, tx: &Sender<Command>) {
-        for e in self.input.release_all() {
-            let _ = tx.send(Command::Input(e));
+    fn overlays(
+        &mut self,
+        ctx: &egui::Context,
+        rest: Rect,
+        model: &AppModel,
+        tx: &Sender<Command>,
+    ) {
+        if self.drawer {
+            // The dimmed backdrop: a click on it closes the drawer and never reaches the Mac.
+            egui::Area::new(Id::unique("drawer-backdrop"))
+                .order(egui::Order::Middle)
+                .fixed_pos(rest.min)
+                .show(ctx, |ui| {
+                    let (r, resp) = ui.allocate_exact_size(rest.size(), Sense::click());
+                    ui.painter()
+                        .rect_filled(r, 0, Color32::from_black_alpha(110));
+                    if resp.clicked() {
+                        self.drawer = false;
+                    }
+                });
+            egui::Area::new(Id::unique("drawer"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(rest.min)
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(theme::PANEL)
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.set_width(DRAWER_WIDTH - 24.0);
+                            ui.set_height(rest.height() - 24.0);
+                            self.drawer_ui(ui, model, tx);
+                        });
+                });
+        }
+        if self.settings {
+            let mut keep = true;
+            egui::Area::new(Id::unique("settings"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos2(rest.right() - SETTINGS_WIDTH, rest.top()))
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(theme::PANEL)
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.set_width(SETTINGS_WIDTH - 24.0);
+                            ui.set_height(rest.height() - 24.0);
+                            keep = self.settings_ui.show(ui, model, tx);
+                        });
+                });
+            if !keep {
+                self.settings = false;
+            }
         }
     }
 
@@ -239,8 +265,10 @@ impl StreamUi {
         let id = Id::unique("sill-stream-picture");
         let resp = ui.interact(panel, id, Sense::click_and_drag());
         resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, "Mac screen"));
-        let search_focus = ctx.memory(|m| m.has_focus(Id::unique("drawer-search")));
-        if !search_focus {
+        // A text field (the drawer's search, the Settings panel's) keeps its keys; otherwise the
+        // picture takes the keyboard back, also after a bar button was clicked.
+        let typing = ctx.text_edit_focused();
+        if !typing {
             ctx.memory_mut(|m| {
                 m.request_focus(id);
                 m.set_focus_lock_filter(
@@ -254,7 +282,7 @@ impl StreamUi {
                 );
             });
         }
-        let keys_active = ctx.memory(|m| m.has_focus(id));
+        let keys_active = !typing && ctx.memory(|m| m.has_focus(id));
 
         let hover = ctx.pointer_hover_pos();
         let pointer_over = hover.is_some_and(|p| {
@@ -341,16 +369,27 @@ impl StreamUi {
             }
         }
 
-        // Locked cover (S06): shades the picture and says why.
-        if let Some(words) = &model.stream.locked {
-            painter.rect_filled(vrect.union(panel), 0, Color32::from_black_alpha(148));
-            painter.text(
-                panel.center(),
+        // The cover (S06): only while another user is on the Mac, then "Unlocking…". A Mac whose
+        // own screen is locked has none: its lock screen streams and the password is typed here.
+        if let Some(cover) = &model.stream.cover {
+            painter.rect_filled(panel, 0, Color32::from_black_alpha(190));
+            let mid = panel.center();
+            let h = painter.text(
+                mid - vec2(0.0, if cover.detail.is_some() { 14.0 } else { 0.0 }),
                 Align2::CENTER_CENTER,
-                words,
-                FontId::proportional(18.0),
+                &cover.title,
+                FontId::proportional(20.0),
                 theme::TEXT,
             );
+            if let Some(d) = &cover.detail {
+                painter.text(
+                    pos2(mid.x, h.bottom() + 16.0),
+                    Align2::CENTER_CENTER,
+                    d,
+                    FontId::proportional(14.0),
+                    theme::MUTED,
+                );
+            }
         }
         if let Some(line) = &model.stream.link_line {
             capsule(
@@ -371,7 +410,7 @@ impl StreamUi {
             );
         }
         if self.video.is_none()
-            && model.stream.locked.is_none()
+            && model.stream.cover.is_none()
             && model.stream.reconnecting.is_none()
         {
             painter.text(
@@ -386,6 +425,7 @@ impl StreamUi {
 
     fn viewport(&mut self, ctx: &egui::Context, panel: Rect, now: f64, tx: &Sender<Command>) {
         let size = (panel.width(), panel.height());
+        self.panel = size;
         if size.0 < 16.0 || size.1 < 16.0 {
             return;
         }
@@ -405,7 +445,7 @@ impl StreamUi {
             let _ = tx.send(Command::Viewport {
                 width: cand.0 as f64,
                 height: cand.1 as f64,
-                scale: None,
+                scale: self.aa,
             });
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -470,11 +510,14 @@ impl StreamUi {
 
     fn bar(&mut self, ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>, tex: &Textures) {
         let s = &model.stream;
+        let has_menus = menus::available(model);
+        let right = 3 + usize::from(has_menus) + usize::from(s.mac_gestures);
         ui.horizontal_centered(|ui| {
-            if bar_button(ui, "Apps", self.drawer, "Open or close the app list").clicked() {
+            if bar_button(ui, "Apps", self.drawer, "Open or close the app list", true).clicked() {
                 self.drawer = !self.drawer;
+                self.drawer_focus = self.drawer;
             }
-            let strip_w = (ui.available_width() - 2.0 * (BTN_W + theme::GAP)).max(0.0);
+            let strip_w = (ui.available_width() - right as f32 * (BTN_W + theme::GAP)).max(0.0);
             ui.allocate_ui_with_layout(
                 vec2(strip_w, THUMB_H),
                 Layout::left_to_right(Align::Center),
@@ -488,21 +531,101 @@ impl StreamUi {
                         });
                 },
             );
+            if has_menus {
+                let r = bar_button(ui, "Menus", false, &format!("{}’s menus", s.mac_name), true);
+                let file = self.test_open.iter().any(|o| o == "menufile");
+                self.popup(ui, &r, "menu", |this, ui| {
+                    if file {
+                        this.menus.submenu(ui, "1", "File", model, tx);
+                    } else {
+                        this.menus.tree(ui, model, tx);
+                    }
+                });
+            }
+            if s.mac_gestures {
+                let r = bar_button(
+                    ui,
+                    "Mac",
+                    false,
+                    "Mac actions: Mission Control, Spaces…",
+                    true,
+                );
+                self.popup(ui, &r, "mac", |_, ui| gesture_menu(ui, tx));
+            }
+            self.aa_button(ui, model, tx);
             let desktop = matches!(s.active, Some(StreamSource::Desktop));
-            if bar_button(ui, "Desktop", desktop, "Show the whole desktop").clicked() {
+            if bar_button(ui, "Desktop", desktop, "Show the whole desktop", true).clicked() {
                 let _ = tx.send(Command::Pick(StreamSource::Desktop));
             }
-            if bar_button(
-                ui,
-                "Settings",
-                self.settings,
-                &format!("Settings for {}", s.mac_name),
-            )
-            .clicked()
-            {
+            let hint = format!("Settings for {}", s.mac_name);
+            if bar_button(ui, "Settings", self.settings, &hint, true).clicked() {
                 self.settings = !self.settings;
             }
         });
+    }
+
+    /// A menu popup under a bar button; TEST ONLY: opened at start when SILL_TEST_STREAM_OPEN says.
+    fn popup(
+        &mut self,
+        ui: &egui::Ui,
+        resp: &egui::Response,
+        name: &str,
+        content: impl FnOnce(&mut Self, &mut egui::Ui),
+    ) {
+        let mut p = egui::Popup::menu(resp);
+        if let Some(at) = self
+            .test_open
+            .iter()
+            .position(|o| o == name || (name == "menu" && o == "menufile"))
+        {
+            if ui.ctx().cumulative_pass_nr() < 4 {
+                p = p.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+            } else if self.test_open[at] == name {
+                self.test_open.remove(at);
+            }
+        }
+        p.show(|ui| content(self, ui));
+    }
+
+    /// Aa (B04): usable only while a window streams; the value stays for the next window.
+    fn aa_button(&mut self, ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>) {
+        let usable = aa_selectable(model.stream.active);
+        let offered = aa_offers_off(model);
+        let label = format!("Aa {}", aa_title(self.aa, offered));
+        let hint = if usable {
+            "Text size"
+        } else {
+            "Text size, available for a window"
+        };
+        let r = bar_button(ui, &label, false, hint, usable);
+        if !usable {
+            return;
+        }
+        let mut chosen: Option<Option<f64>> = None;
+        let cur = self.aa;
+        self.popup(ui, &r, "aa", |_, ui| {
+            for d in aa_detents(offered) {
+                if ui
+                    .selectable_label(cur == d, aa_title(d, offered))
+                    .clicked()
+                {
+                    chosen = Some(d);
+                    ui.close();
+                }
+            }
+        });
+        if let Some(d) = chosen {
+            self.aa = d;
+            let (w, h) = self.panel;
+            if w > 0.0 {
+                self.vp_sent = Some((w, h));
+                let _ = tx.send(Command::Viewport {
+                    width: w as f64,
+                    height: h as f64,
+                    scale: d,
+                });
+            }
+        }
     }
 
     fn thumbnails(
@@ -589,7 +712,13 @@ impl StreamUi {
             .hint_text(format!("Search apps on {}", s.mac_name))
             .desired_width(f32::INFINITY)
             .margin(vec2(10.0, 8.0));
-        ui.add(search);
+        let field = ui.add(search);
+        if std::mem::take(&mut self.drawer_focus) {
+            field.request_focus();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.drawer = false;
+        }
         ui.add_space(theme::GAP);
 
         if let Some(words) = &s.locked {
@@ -698,18 +827,101 @@ fn write_frame(queue: &wgpu::Queue, texture: &wgpu::Texture, f: &VideoFrame) {
     );
 }
 
+// ---- Aa and the Mac's gestures (pure) ------------------------------------------------------
+
+/// TextScale.selectable: only a window can be sized.
+fn aa_selectable(active: Option<StreamSource>) -> bool {
+    matches!(active, Some(StreamSource::Window(_)))
+}
+
+/// TextScale.offersOff: no Off while the running window streams on the Mac's virtual display (no
+/// scale is 1× there); else not while the setting is on; offered before the Mac has said.
+fn aa_offers_off(model: &AppModel) -> bool {
+    let s = model.stream.settings.as_ref();
+    if let (Some(StreamSource::Window(_)), Some(run)) =
+        (model.stream.active, s.and_then(|s| s.stream.as_ref()))
+    {
+        return !run.on_virtual_display;
+    }
+    s.is_none_or(|s| !s.settings.virtual_display)
+}
+
+/// The ruler's detents left to right, as scales (None = Off).
+fn aa_detents(offered: bool) -> Vec<Option<f64>> {
+    let mut v: Vec<Option<f64>> = Vec::new();
+    if offered {
+        v.push(None);
+    }
+    v.extend(SCALES.iter().map(|s| Some(*s)));
+    v
+}
+
+/// "Off", or the scale with trailing zeros dropped and "×": 0.5×, 1×, 1.25× (TextScale.title).
+/// An untouched Aa without Off reads 1×.
+fn aa_title(scale: Option<f64>, offered: bool) -> String {
+    match scale {
+        None if offered => "Off".into(),
+        None => "1×".into(),
+        Some(s) => {
+            let mut t = format!("{s:.2}");
+            while t.ends_with('0') {
+                t.pop();
+            }
+            if t.ends_with('.') {
+                t.pop();
+            }
+            format!("{t}×")
+        }
+    }
+}
+
+/// The Mac menu's actions, by the gesture name GestureChords.swift:133-138 maps to each:
+/// swipeUp Mission Control, swipeDown App Exposé, swipeLeft next Space, swipeRight previous Space,
+/// spread Show Desktop, pinch Apps (Launchpad).
+const GESTURES: [(&str, &str); 6] = [
+    ("Mission Control", "swipeUp"),
+    ("App Exposé", "swipeDown"),
+    ("Next Space", "swipeLeft"),
+    ("Previous Space", "swipeRight"),
+    ("Show Desktop", "spread"),
+    ("Launchpad", "pinch"),
+];
+
+fn gesture_menu(ui: &mut egui::Ui, tx: &Sender<Command>) {
+    ui.set_min_width(170.0);
+    for (name, g) in GESTURES {
+        if ui.button(name).clicked() {
+            let _ = tx.send(Command::Gesture(g.to_string()));
+            ui.close();
+        }
+    }
+}
+
 // ---- small drawing helpers ---------------------------------------------------------------
 
-fn bar_button(ui: &mut egui::Ui, label: &str, open: bool, hint: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(BTN_W, THUMB_H), Sense::click());
+fn bar_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    open: bool,
+    hint: &str,
+    enabled: bool,
+) -> egui::Response {
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(vec2(BTN_W, THUMB_H), sense);
     resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, hint));
-    let fill = if open || resp.hovered() {
+    let fill = if open || (enabled && resp.hovered()) {
         theme::CONTROL_OPEN
     } else {
         theme::CONTROL
     };
+    // Dimmed to 35 % when unusable, as Aa is over the Desktop (StreamScreen.swift).
+    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.35) };
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
+        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fade(fill));
     if resp.has_focus() {
         ui.painter().rect_stroke(
             rect,
@@ -718,11 +930,11 @@ fn bar_button(ui: &mut egui::Ui, label: &str, open: bool, hint: &str) -> egui::R
             StrokeKind::Inside,
         );
     }
-    let color = if open {
+    let color = fade(if open {
         theme::ACCENT
     } else {
         theme::BAR_LABEL
-    };
+    });
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -731,14 +943,6 @@ fn bar_button(ui: &mut egui::Ui, label: &str, open: bool, hint: &str) -> egui::R
         color,
     );
     resp.on_hover_text(hint)
-}
-
-fn wide_button(ui: &mut egui::Ui, label: &str, accent: bool) -> egui::Response {
-    let color = if accent { theme::ACCENT } else { theme::TEXT };
-    ui.add(
-        egui::Button::new(RichText::new(label).size(14.0).color(color))
-            .min_size(vec2(ui.available_width(), theme::MIN_TARGET + 4.0)),
-    )
 }
 
 fn section(ui: &mut egui::Ui, title: &str) {
@@ -944,7 +1148,12 @@ pub fn mock_case(case: &str, model: &mut AppModel, video: &VideoSlot) {
     use sill_proto::switcher::AppInfo;
     if !matches!(
         case,
-        "stream-desktop" | "stream-drawer" | "stream-locked" | "stream-reconnecting"
+        "stream-desktop"
+            | "stream-drawer"
+            | "stream-locked"
+            | "stream-reconnecting"
+            | "stream-other-user"
+            | "stream-menu"
     ) {
         return;
     }
@@ -952,6 +1161,8 @@ pub fn mock_case(case: &str, model: &mut AppModel, video: &VideoSlot) {
     let s = &mut model.stream;
     s.mac_name = "Sample Mac mini".into();
     s.mac_key_repeat = true;
+    s.mac_gestures = true;
+    s.menus = Some(sample_menus(&mut s.menu_items));
     let win = |id, title: &str, app: &str, bundle: &str| WindowInfo {
         id,
         title: title.into(),
@@ -1008,8 +1219,16 @@ pub fn mock_case(case: &str, model: &mut AppModel, video: &VideoSlot) {
         );
     }
     match case {
+        // The Mac's own screen locked: its lock screen streams under no cover.
         "stream-locked" => {
             s.locked = Some("Sample Mac mini is locked. Unlock it to keep using it.".into())
+        }
+        "stream-other-user" => {
+            s.locked = Some("Another user started controlling Sample Mac mini.".into());
+            s.cover = Some(Cover {
+                title: "Another user started controlling this Mac.".into(),
+                detail: Some("Sill shows it again when they sign out.".into()),
+            });
         }
         "stream-reconnecting" => s.reconnecting = Some("Reconnecting to Sample Mac mini…".into()),
         _ => {}
@@ -1026,5 +1245,120 @@ pub fn mock_case(case: &str, model: &mut AppModel, video: &VideoSlot) {
             bgra: sample_picture(w, h, 0.5),
             serial: 1,
         });
+    }
+}
+
+/// TEST ONLY: sample menus (and the fetched items of two of them).
+fn sample_menus(
+    items: &mut HashMap<String, sill_proto::menu::MacMenu>,
+) -> sill_proto::menu::MacMenu {
+    use sill_proto::menu::{MacMenu, MacMenuItem};
+    let top = |id: &str, t: &str| MacMenuItem {
+        id: Some(id.into()),
+        title: Some(t.into()),
+        submenu: Some(true),
+        ..Default::default()
+    };
+    let leaf =
+        |id: &str, t: &str, key: Option<&str>, enabled: bool, mark: Option<&str>| MacMenuItem {
+            id: Some(id.into()),
+            title: Some(t.into()),
+            key: key.map(Into::into),
+            enabled: Some(enabled),
+            mark: mark.map(Into::into),
+            ..Default::default()
+        };
+    let sep = MacMenuItem {
+        separator: Some(true),
+        ..Default::default()
+    };
+    let file = vec![
+        leaf("1.0", "New Window", Some("⌘N"), true, None),
+        leaf("1.1", "Open…", Some("⌘O"), true, None),
+        MacMenuItem {
+            submenu: Some(true),
+            ..top("1.2", "Open Recent")
+        },
+        sep.clone(),
+        leaf("1.4", "Save", Some("⌘S"), false, None),
+        leaf("1.5", "Save As…", Some("⇧⌘S"), true, None),
+        sep,
+        leaf("1.7", "Word Wrap", None, true, Some("✓")),
+    ];
+    items.insert(
+        "1".into(),
+        MacMenu {
+            version: Some(1),
+            menu: Some("File".into()),
+            items: Some(file),
+            ..Default::default()
+        },
+    );
+    items.insert(
+        "2".into(),
+        MacMenu {
+            version: Some(1),
+            menu: Some("Edit".into()),
+            items: Some(vec![
+                leaf("2.0", "Undo", Some("⌘Z"), true, None),
+                leaf("2.1", "Redo", Some("⇧⌘Z"), false, None),
+            ]),
+            stale: Some(true),
+            ..Default::default()
+        },
+    );
+    MacMenu {
+        version: Some(1),
+        app: Some("Sample Editor".into()),
+        menus: Some(vec![
+            top("1", "File"),
+            top("2", "Edit"),
+            top("3", "View"),
+            top("4", "Window"),
+        ]),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aa_detents_and_titles_follow_textscale() {
+        assert_eq!(aa_detents(true).len(), 6);
+        assert_eq!(
+            aa_detents(false),
+            vec![Some(0.5), Some(0.75), Some(1.0), Some(1.25), Some(1.5)]
+        );
+        assert_eq!(aa_title(None, true), "Off");
+        assert_eq!(aa_title(None, false), "1×");
+        assert_eq!(aa_title(Some(1.0), true), "1×");
+        assert_eq!(aa_title(Some(0.5), true), "0.5×");
+        assert_eq!(aa_title(Some(1.25), true), "1.25×");
+    }
+
+    #[test]
+    fn aa_is_usable_only_over_a_window() {
+        assert!(aa_selectable(Some(StreamSource::Window(3))));
+        assert!(!aa_selectable(Some(StreamSource::Desktop)));
+        assert!(!aa_selectable(Some(StreamSource::None)));
+        assert!(!aa_selectable(None));
+    }
+
+    #[test]
+    fn gestures_use_the_hosts_names() {
+        let names: Vec<_> = GESTURES.iter().map(|(_, g)| *g).collect();
+        assert_eq!(
+            names,
+            [
+                "swipeUp",
+                "swipeDown",
+                "swipeLeft",
+                "swipeRight",
+                "spread",
+                "pinch"
+            ]
+        );
     }
 }

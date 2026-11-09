@@ -17,15 +17,6 @@ pub struct Outcome {
     pub notice: bool,
 }
 
-const KNOWN: [&str; 6] = [
-    Goodbye::QUIT,
-    Goodbye::REMOVED,
-    Goodbye::REMOTE_OFF,
-    Goodbye::INTERNET_OFF,
-    Goodbye::BUSY,
-    Goodbye::PAIRING_REQUIRED,
-];
-
 /// SafeText.label, enough for a status line: one line, no control or bidirectional characters,
 /// at most 300 characters.
 pub fn safe_text(text: &str) -> Option<String> {
@@ -123,10 +114,6 @@ pub fn outcome(goodbye: Option<&Goodbye>, mac: &str, saved: bool) -> Outcome {
     }
 }
 
-pub fn is_known_reason(reason: &str) -> bool {
-    KNOWN.contains(&reason)
-}
-
 /// The outcome for a session's end. A Mac that never said anything to a paired key refused it
 /// (not paired, or removed): that does not reconnect.
 pub fn outcome_for_close(
@@ -185,11 +172,76 @@ pub fn pair_failure(e: &PairError, mac: &str) -> String {
     }
 }
 
-/// `LockedMac.words`.
-pub fn locked(why: LockedWhy, mac: &str) -> String {
+/// What covers the stream (LockedMac.Shade, Switcher.swift:106): another user on the Mac, then
+/// "Unlocking…" until its picture comes back. A locked screen of this session's own has no cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shade {
+    Locked(LockedWhy),
+    Unlocking,
+}
+
+/// How long "Unlocking…" waits for the picture at most.
+pub const UNLOCKING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// The cover after a window list that says `why` (None: not locked): another user's console covers;
+/// a locked screen streams its lock screen and has no cover; after a cover, "Unlocking…" until the
+/// next keyframe.
+pub fn shade_after_list(was: Option<Shade>, why: Option<LockedWhy>) -> Option<Shade> {
+    if why == Some(LockedWhy::OtherUser) {
+        return Some(Shade::Locked(LockedWhy::OtherUser));
+    }
+    was.map(|_| Shade::Unlocking)
+}
+
+/// The cover after a frame: a keyframe ends "Unlocking…", nothing else does.
+pub fn shade_after_frame(was: Option<Shade>, keyframe: bool) -> Option<Shade> {
+    if was == Some(Shade::Unlocking) && keyframe {
+        None
+    } else {
+        was
+    }
+}
+
+fn name(mac: &str) -> &str {
+    if mac.is_empty() {
+        "The Mac"
+    } else {
+        mac
+    }
+}
+
+/// The Apps drawer's and the Settings panel's line where the windows would be (`LockedMac.line`).
+pub fn line(mac: &str, why: LockedWhy) -> String {
     match why {
-        LockedWhy::ScreenLocked => format!("{mac} is locked. Unlock it to see its windows."),
+        LockedWhy::ScreenLocked => format!("{} is locked. Unlock it to see its windows.", name(mac)),
         LockedWhy::OtherUser => "Another user started controlling this Mac. Log in to your account to reactivate screen sharing with Sill.".into(),
+    }
+}
+
+/// The cover's title (`LockedMac.title`).
+pub fn title(mac: &str, shade: Shade) -> String {
+    match shade {
+        Shade::Locked(LockedWhy::ScreenLocked) => format!("{} is locked", name(mac)),
+        Shade::Locked(LockedWhy::OtherUser) => "Another user started controlling this Mac.".into(),
+        Shade::Unlocking => "Unlocking…".into(),
+    }
+}
+
+/// The cover's line under its title (`LockedMac.detail`); `paired`: this session's key is the Mac's.
+pub fn detail(shade: Shade, paired: Option<bool>) -> Option<String> {
+    match shade {
+        Shade::Locked(LockedWhy::ScreenLocked) => Some(
+            if paired == Some(true) {
+                "To unlock it from here, type its password and press Return. Its windows come back once it is unlocked."
+            } else {
+                "Its windows come back once it is unlocked."
+            }
+            .into(),
+        ),
+        Shade::Locked(LockedWhy::OtherUser) => {
+            Some("Log in to your account to reactivate screen sharing with Sill.".into())
+        }
+        Shade::Unlocking => None,
     }
 }
 
@@ -293,14 +345,149 @@ mod tests {
         assert!(o.reconnect);
     }
 
+    use LockedWhy::{OtherUser, ScreenLocked};
+
     #[test]
-    fn locked_words_are_noahs() {
+    fn why_a_list_says_locked() {
+        use sill_proto::switcher::{StreamSource, WindowList};
+        let list = |locked: Option<bool>, off: Option<bool>| WindowList {
+            mac_name: "M".into(),
+            windows: vec![],
+            active: StreamSource::Desktop,
+            launch_id: None,
+            host_version: None,
+            protocol: None,
+            gestures: None,
+            clipboard: None,
+            key_repeat: None,
+            locked,
+            off_console: off,
+        };
+        assert_eq!(list(None, None).locked_why(), None);
+        assert_eq!(list(Some(true), None).locked_why(), Some(ScreenLocked));
+        assert_eq!(list(Some(true), Some(true)).locked_why(), Some(OtherUser));
+        // offConsole without locked: not locked
+        assert_eq!(list(None, Some(true)).locked_why(), None);
+    }
+
+    #[test]
+    fn the_lines_and_titles() {
         assert_eq!(
-            locked(LockedWhy::ScreenLocked, "Mac"),
-            "Mac is locked. Unlock it to see its windows."
+            line("Noah’s MacBook Pro", ScreenLocked),
+            "Noah’s MacBook Pro is locked. Unlock it to see its windows."
         );
-        assert!(locked(LockedWhy::OtherUser, "Mac")
-            .starts_with("Another user started controlling this Mac."));
+        assert_eq!(
+            line("Noah’s MacBook Pro", OtherUser),
+            "Another user started controlling this Mac. Log in to your account to reactivate screen sharing with Sill."
+        );
+        assert_eq!(
+            line("", ScreenLocked),
+            "The Mac is locked. Unlock it to see its windows."
+        );
+        assert_eq!(
+            title("Mac mini", Shade::Locked(ScreenLocked)),
+            "Mac mini is locked"
+        );
+        assert_eq!(
+            title("Mac mini", Shade::Locked(OtherUser)),
+            "Another user started controlling this Mac."
+        );
+        assert_eq!(title("Mac mini", Shade::Unlocking), "Unlocking…");
+    }
+
+    #[test]
+    fn the_details_password_only_for_a_paired_session() {
+        let pw = "To unlock it from here, type its password and press Return. Its windows come back once it is unlocked.";
+        let plain = "Its windows come back once it is unlocked.";
+        let s = Shade::Locked(ScreenLocked);
+        assert_eq!(detail(s, Some(true)).as_deref(), Some(pw));
+        assert_eq!(detail(s, Some(false)).as_deref(), Some(plain));
+        assert_eq!(detail(s, None).as_deref(), Some(plain));
+        let other = "Log in to your account to reactivate screen sharing with Sill.";
+        assert_eq!(
+            detail(Shade::Locked(OtherUser), Some(true)).as_deref(),
+            Some(other)
+        );
+        assert_eq!(
+            detail(Shade::Locked(OtherUser), Some(false)).as_deref(),
+            Some(other)
+        );
+        assert_eq!(detail(Shade::Unlocking, Some(true)), None);
+    }
+
+    #[test]
+    fn the_cover_is_only_for_another_users_console() {
+        let u = Some(Shade::Unlocking);
+        let o = Some(Shade::Locked(OtherUser));
+        assert_eq!(shade_after_list(None, None), None);
+        // this session's own locked screen: no cover, the lock screen streams
+        assert_eq!(shade_after_list(None, Some(ScreenLocked)), None);
+        assert_eq!(shade_after_list(None, Some(OtherUser)), o);
+        assert_eq!(shade_after_list(o, Some(OtherUser)), o);
+        assert_eq!(shade_after_list(o, Some(ScreenLocked)), u);
+        assert_eq!(shade_after_list(u, Some(ScreenLocked)), u);
+        assert_eq!(shade_after_list(o, None), u);
+        assert_eq!(shade_after_list(u, None), u);
+    }
+
+    #[test]
+    fn a_keyframe_ends_unlocking_never_the_locked_cover() {
+        let o = Some(Shade::Locked(OtherUser));
+        assert_eq!(shade_after_frame(Some(Shade::Unlocking), true), None);
+        assert_eq!(
+            shade_after_frame(Some(Shade::Unlocking), false),
+            Some(Shade::Unlocking)
+        );
+        assert_eq!(shade_after_frame(o, true), o);
+        assert_eq!(shade_after_frame(None, true), None);
+        assert_eq!(UNLOCKING_TIMEOUT.as_secs(), 4);
+    }
+
+    /// Lock-policy's random sessions: the cover while another user has the console, "Unlocking…"
+    /// until a keyframe after it, none otherwise.
+    #[test]
+    fn random_sessions_of_lists_and_frames() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let mut broken = 0;
+        for _ in 0..2000 {
+            let mut shade = None;
+            let (mut last_off, mut waiting) = (false, false);
+            for _ in 0..30 {
+                if next(2) == 0 {
+                    let why = [None, Some(ScreenLocked), Some(OtherUser)][next(3) as usize];
+                    shade = shade_after_list(shade, why);
+                    let off = why == Some(OtherUser);
+                    if off {
+                        waiting = false;
+                    } else if last_off || waiting {
+                        waiting = true;
+                    }
+                    last_off = off;
+                } else {
+                    let key = next(3) == 0;
+                    shade = shade_after_frame(shade, key);
+                    if key && waiting {
+                        waiting = false;
+                    }
+                }
+                if last_off && shade != Some(Shade::Locked(OtherUser)) {
+                    broken += 1;
+                }
+                if waiting && shade != Some(Shade::Unlocking) {
+                    broken += 1;
+                }
+                if !last_off && !waiting && shade.is_some() {
+                    broken += 1;
+                }
+            }
+        }
+        assert_eq!(broken, 0);
     }
 
     #[test]

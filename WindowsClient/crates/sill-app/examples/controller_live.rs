@@ -6,6 +6,8 @@
 //! from WindowsClient/target (sill-dev-identity/key.pk8, sill-dev-macs.json) into it.
 #![allow(dead_code)]
 
+#[path = "../src/clipboard.rs"]
+mod clipboard;
 #[path = "../src/controller.rs"]
 mod controller;
 #[path = "../src/discovery.rs"]
@@ -61,9 +63,9 @@ fn main() {
             )
         });
         println!(
-            "[{:5.1}s] {label}: screen {:?}, mac {:?}, windows {}, apps {}, thumbs {}, icons {}, active {:?}, locked {:?}, settings {:?}, \
+            "[{:5.1}s] {label}: screen {:?}, mac {:?}, windows {}, apps {}, thumbs {}, icons {}, active {:?}, locked {:?}, cover {:?}, settings {:?}, \
              clipboard {} keyRepeat {} gestures {}, rtt {:.0} ms, decoded fps {:.1}; received frames {} (key {}), sets {}, \
-             dropped {}, kf requests {}, {} KB, audio msgs {}, lists {}, cursor {}, reconnecting {:?}, line {:?}, status {:?}",
+             dropped {} (full {}, awaiting keyframe {}), decode avg {} us max {} us, kf requests {}, {} KB, audio msgs {}, lists {}, cursor {}, reconnecting {:?}, line {:?}, status {:?}",
             t0.elapsed().as_secs_f64(),
             m.screen,
             m.stream.mac_name,
@@ -73,6 +75,7 @@ fn main() {
             m.stream.icons.len(),
             m.stream.active,
             m.stream.locked,
+            m.stream.cover,
             s,
             m.stream.mac_clipboard,
             m.stream.mac_key_repeat,
@@ -83,6 +86,10 @@ fn main() {
             c.keyframes_in.load(Ordering::Relaxed),
             c.sets_in.load(Ordering::Relaxed),
             c.frames_dropped.load(Ordering::Relaxed),
+            c.dropped_full.load(Ordering::Relaxed),
+            c.dropped_waiting.load(Ordering::Relaxed),
+            c.decode_micros.load(Ordering::Relaxed) / c.frames_decoded.load(Ordering::Relaxed).max(1),
+            c.decode_max_micros.load(Ordering::Relaxed),
             c.keyframe_requests.load(Ordering::Relaxed),
             c.bytes_in.load(Ordering::Relaxed) / 1024,
             c.audio_packets.load(Ordering::Relaxed),
@@ -124,6 +131,24 @@ fn main() {
     while Instant::now() < end {
         std::thread::sleep(Duration::from_secs(1));
         summary("running");
+    }
+    if std::env::var_os("TWICE").is_some() {
+        // the same again in one process: a second session over the first one's decoder and queue
+        h.commands.send(Command::Disconnect).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let lists = counters.window_lists.load(Ordering::Relaxed);
+        h.commands
+            .send(Command::Connect(format!("saved:{mac_id}")))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(25);
+        while counters.window_lists.load(Ordering::Relaxed) == lists && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        summary("second session");
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_secs(1));
+            summary("second running");
+        }
     }
     let before = h
         .video

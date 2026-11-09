@@ -85,7 +85,9 @@ impl SillApp {
         // TEST ONLY: SILL_TEST_CONNECT=<Mac ID> connects to that saved Mac at launch, as a click
         // on its row does (headless end-to-end runs).
         if let Ok(id) = std::env::var("SILL_TEST_CONNECT") {
-            let _ = handles.commands.send(Command::Connect(format!("saved:{id}")));
+            let _ = handles
+                .commands
+                .send(Command::Connect(format!("saved:{id}")));
         }
         SillApp {
             shared: handles.shared,
@@ -100,6 +102,8 @@ impl SillApp {
 
 impl eframe::App for SillApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // The clipboard reads this PC's text only while Sill's window is the active one.
+        crate::clipboard::set_window_active(ui.ctx().input(|i| i.focused));
         let model = self.shared.lock().map(|m| m.clone()).unwrap_or_default();
         match model.screen {
             Screen::Connect => self.connect.show(ui, &model, &self.commands),

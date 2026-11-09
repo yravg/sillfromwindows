@@ -8,6 +8,9 @@ use std::collections::{HashMap, VecDeque};
 
 /// The output timeline: stereo frames from absolute sample `base`. Writes go at an absolute sample;
 /// frames already past are skipped, gaps are silence.
+const DEFAULT_PACKET: usize = 480;
+const DEFAULT_PRIMING: usize = 240;
+
 pub struct Ring {
     base: i64,
     data: VecDeque<(f32, f32)>,
@@ -95,6 +98,7 @@ pub struct Engine {
     /// A silent sink's last advance.
     silent_at: Option<f64>,
     silent_frac: f64,
+    size_known: bool,
 }
 
 impl Default for Engine {
@@ -123,6 +127,7 @@ impl Engine {
             last_wall_end: 0.0,
             silent_at: None,
             silent_frac: 0.0,
+            size_known: false,
         }
     }
 
@@ -147,8 +152,29 @@ impl Engine {
         }
         let base = *self.wall_base.get_or_insert(wall_time);
         let stamp = wall_time - base;
-        // A different packet size is a new decoder for the rules.
-        if self.epoch == 0 || frames != self.timing.frames_per_packet() {
+        // The decoder drops the priming of a segment's first packet, so that packet is short and its
+        // stamp is the Mac's first sample's: the rules drop the priming from the stamp (rule 9), and
+        // its size never sets the epoch's. The next full packet sets it; a later different size is
+        // a new decoder.
+        if self.epoch == 0 {
+            self.epoch = 1;
+            self.timing.format(1, DEFAULT_PACKET, DEFAULT_PRIMING, &[]);
+            self.seq = 0;
+            self.last_stamp = None;
+            self.size_known = false;
+        }
+        let mut priming_dropped = 0;
+        if segment_start {
+            priming_dropped = if self.size_known {
+                self.timing.frames_per_packet().saturating_sub(frames)
+            } else {
+                DEFAULT_PRIMING
+            };
+            self.timing.set_priming(priming_dropped);
+        } else if !self.size_known {
+            self.timing.set_frames_per_packet(frames);
+            self.size_known = true;
+        } else if frames != self.timing.frames_per_packet() {
             self.epoch += 1;
             self.timing.format(self.epoch, frames, 0, &[]);
             self.seq = 0;
@@ -156,32 +182,40 @@ impl Engine {
         }
         // The header carries no seq: a stamp that does not follow the one before (by over half a
         // packet) is a packet the Mac skipped, which the rules count as a missing seq (rule 8).
+        let full = frames + priming_dropped;
         match self.last_stamp {
             Some(prev) if !segment_start => {
                 let expected = prev + self.last_frames as f64 / RATE;
-                self.seq = self.seq.wrapping_add(
-                    if (stamp - expected).abs() > frames as f64 / RATE / 2.0 {
-                        2
-                    } else {
-                        1
-                    },
-                );
+                let off = (stamp - expected).abs() > full as f64 / RATE / 2.0;
+                self.seq = self.seq.wrapping_add(if off { 2 } else { 1 });
             }
             Some(_) => self.seq = self.seq.wrapping_add(1),
             None => {}
         }
         self.last_stamp = Some(stamp);
-        self.last_frames = frames;
+        self.last_frames = full;
         self.last_wall_end = wall_time + frames as f64 / RATE;
         let plan = self
             .timing
             .packet(self.epoch, self.seq, stamp, segment_start, None, now);
-        self.act_plan(plan, samples, channels, frames);
+        self.act_plan(plan, samples, channels, frames, segment_start);
     }
 
-    fn act_plan(&mut self, plan: Plan, samples: &[f32], channels: usize, frames: usize) {
+    fn act_plan(
+        &mut self,
+        plan: Plan,
+        samples: &[f32],
+        channels: usize,
+        frames: usize,
+        segment_start: bool,
+    ) {
         if let Some(id) = plan.id {
-            let drop = plan.drop_front.min(frames);
+            // A segment's priming is already gone from what the decoder gave.
+            let drop = if segment_start {
+                0
+            } else {
+                plan.drop_front.min(frames)
+            };
             let mut l = Vec::with_capacity(frames - drop);
             let mut r = Vec::with_capacity(frames - drop);
             for f in drop..frames {
@@ -336,5 +370,6 @@ impl Engine {
         self.wall_base = None;
         self.epoch = 0;
         self.last_stamp = None;
+        self.size_known = false;
     }
 }

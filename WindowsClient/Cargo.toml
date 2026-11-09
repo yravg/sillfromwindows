@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sill-proto", "crates/sill-net"]
+members = ["crates/sill-proto", "crates/sill-net", "crates/sill-media", "crates/sill-app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,6 +20,18 @@ rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pemfile = "2"
 sill-proto = { path = "crates/sill-proto" }
+sill-net = { path = "crates/sill-net" }
+sill-media = { path = "crates/sill-media" }
+libloading = "0.9"
+cpal = "0.18"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "x11", "wayland"] }
+egui = "0.37"
+egui-wgpu = "0.37"
+mdns-sd = "0.21"
+arboard = "3.7"
+dirs = "7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
 # PBKDF2 at 600,000 rounds is slow unoptimized; dependencies always build optimized.
 [profile.dev.package."*"]

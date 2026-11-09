@@ -336,6 +336,12 @@ fn run_session(args: &Args, identity_dir: &Path) {
         session.select_source(src);
     }
 
+    // --dump FILE: every frame, parameter set and audio message, re-encoded in Sill's own framing,
+    // as test fixtures for the decoders (crates/sill-media/tests).
+    let mut dump = args
+        .flags
+        .get("dump")
+        .map(|p| std::fs::File::create(p).unwrap_or_else(|e| die(&format!("--dump {p}: {e}"))));
     let t0 = Instant::now();
     let mut next_report = t0 + Duration::from_secs(1);
     let (mut frames, mut keyframes, mut bytes, mut sets) = (0u64, 0u64, 0usize, 0u64);
@@ -381,19 +387,33 @@ fn run_session(args: &Args, identity_dir: &Path) {
                     g.reason, g.message, g.reconnect
                 ),
                 SessionEvent::Pong { rtt_ms } => worst_rtt = worst_rtt.max(rtt_ms),
-                SessionEvent::Message(m) => match m.kind {
-                    MessageKind::Frame => {
-                        frames += 1;
-                        keyframes += u64::from(m.is_keyframe);
-                        bytes += m.payload.len();
+                SessionEvent::Message(m) => {
+                    if let Some(f) = dump.as_mut() {
+                        if matches!(
+                            m.kind,
+                            MessageKind::Frame | MessageKind::ParameterSets | MessageKind::Audio
+                        ) {
+                            use std::io::Write;
+                            if let Ok(b) = m.serialize() {
+                                f.write_all(&b)
+                                    .unwrap_or_else(|e| die(&format!("--dump: {e}")));
+                            }
+                        }
                     }
-                    MessageKind::ParameterSets => sets += 1,
-                    k => {
-                        let e = other.entry(k.as_u8()).or_default();
-                        e.0 += 1;
-                        e.1 += m.payload.len();
+                    match m.kind {
+                        MessageKind::Frame => {
+                            frames += 1;
+                            keyframes += u64::from(m.is_keyframe);
+                            bytes += m.payload.len();
+                        }
+                        MessageKind::ParameterSets => sets += 1,
+                        k => {
+                            let e = other.entry(k.as_u8()).or_default();
+                            e.0 += 1;
+                            e.1 += m.payload.len();
+                        }
                     }
-                },
+                }
                 SessionEvent::Closed(r) => {
                     println!("session closed: {}", close_words(&r));
                     return;

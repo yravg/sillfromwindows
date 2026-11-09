@@ -1,0 +1,28 @@
+[package]
+name = "sill-app"
+description = "Sill for Windows: stream a Mac window to this PC."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "Sill"
+path = "src/main.rs"
+
+[dependencies]
+sill-proto.workspace = true
+sill-net.workspace = true
+sill-media.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+mdns-sd.workspace = true
+arboard.workspace = true
+dirs.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

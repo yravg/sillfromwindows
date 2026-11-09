@@ -1,2 +1,2 @@
 /target
-crates/sill-media/tests/fixtures/*.sill
+crates/sill-media/tests/fixtures/desktop-*.sill

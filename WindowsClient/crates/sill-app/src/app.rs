@@ -70,7 +70,12 @@ impl SillApp {
         theme::apply(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let waker = Arc::new(move || ctx.request_repaint());
-        let handles = controller::start(waker);
+        // TEST ONLY: SILL_TEST_MOCK=<case> draws labelled sample data (ui/mock.rs) with no
+        // controller and no network; every command is printed instead of sent.
+        let handles = match std::env::var("SILL_TEST_MOCK") {
+            Ok(case) => ui::mock::start(&case),
+            Err(_) => controller::start(waker),
+        };
         SillApp {
             shared: handles.shared,
             commands: handles.commands,

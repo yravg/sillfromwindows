@@ -21,3 +21,6 @@ impl StreamUi {
         egui::CentralPanel::default().show(ui, |_ui| {});
     }
 }
+
+/// TEST ONLY: fill `model` (and `video` with a sample frame) for a stream-screen SILL_TEST_MOCK case.
+pub fn mock_case(_case: &str, _model: &mut AppModel, _video: &VideoSlot) {}

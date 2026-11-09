@@ -11,3 +11,8 @@ impl ConnectUi {
         egui::CentralPanel::default().show(ui, |ui| ui.heading("Connect to a Mac"));
     }
 }
+
+/// TEST ONLY: fill `model` for a connect-screen SILL_TEST_MOCK case; false when it is not one.
+pub fn mock_case(_case: &str, _model: &mut AppModel) -> bool {
+    false
+}

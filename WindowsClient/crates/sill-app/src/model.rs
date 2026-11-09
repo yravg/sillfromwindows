@@ -16,6 +16,8 @@ use sill_proto::settings::{HostSettingsChange, HostSettingsState};
 use sill_proto::switcher::{AppInfo, StreamSource, WindowAction, WindowInfo};
 
 /// What the UI asks for. Every control sends one of these; nothing else reaches the Mac.
+/// (`WindowCommand` keeps the wire's name for kind 15.)
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Connect to a row of the connect screen (its [`MacRow::id`]).
@@ -23,7 +25,10 @@ pub enum Command {
     /// Connect to a saved Mac through its Remote Access addresses (the row's "Connect Remotely").
     ConnectRemotely(String),
     /// Pair with the code a Mac shows: `addr` is "host" or "host:port" (port 7455 when absent).
-    PairWithCode { addr: String, code: String },
+    PairWithCode {
+        addr: String,
+        code: String,
+    },
     /// Pair with a `sill://pair…` link (pasted, or from the protocol handler).
     PairWithLink(String),
     /// Ask a home-network Mac (row id) to show its code (kind 19 "ask").
@@ -37,18 +42,31 @@ pub enum Command {
     /// Kind 7: a bundle ID from the app list.
     Launch(String),
     /// Kind 15.
-    WindowCommand { window_id: u32, action: WindowAction },
+    WindowCommand {
+        window_id: u32,
+        action: WindowAction,
+    },
     /// Kind 8: one input event, positions already as fractions of the frame (0…1).
     Input(InputEvent),
     /// Kind 9: the stream panel's size in points and the Aa scale (None = Off).
-    Viewport { width: f64, height: f64, scale: Option<f64> },
+    Viewport {
+        width: f64,
+        height: f64,
+        scale: Option<f64>,
+    },
     /// Kind 17 (through the settings ledger).
     ChangeSettings(HostSettingsChange),
     /// Kind 32: text from this PC's clipboard to the Mac.
     SendClipboard(String),
     /// Kind 27 / 25: the Mac's menus.
-    FetchMenu { id: String, title: String },
-    PressMenu { id: String, title: String },
+    FetchMenu {
+        id: String,
+        title: String,
+    },
+    PressMenu {
+        id: String,
+        title: String,
+    },
     /// Kind 28 by name ("swipeUp", "swipeDown", "swipeLeft", "swipeRight", "pinch", "spread").
     Gesture(String),
     /// This device's own preferences (never sent): mute, share clipboard, reverse scrolling.
@@ -96,8 +114,12 @@ pub enum PairingState {
     /// Dialing and proving; the words say what is happening.
     Working(String),
     /// The Mac answered "shown": its code is on its screen now.
-    CodeShown { mac: String },
-    Paired { mac: String },
+    CodeShown {
+        mac: String,
+    },
+    Paired {
+        mac: String,
+    },
     /// What failed and what to do, in Sill's words.
     Failed(String),
 }
@@ -156,8 +178,13 @@ pub struct StreamModel {
     /// Answers to menu fetches, by menu id.
     pub menu_items: HashMap<String, MacMenu>,
     pub cursor: MacCursor,
-    /// The Mac is locked or another user is on it (LockedMac's words), else None.
+    /// The Mac is locked or another user is on it: LockedMac.line's words, for the Apps drawer and
+    /// the Settings panel's header (Switcher.swift:131). Never drawn over the picture.
     pub locked: Option<String>,
+    /// What covers the picture (LockedMac.shade, Switcher.swift:106-160): only while another user is
+    /// on the Mac, then "Unlocking…" until the next keyframe (at most 4 s). A Mac whose own screen is
+    /// locked has NO cover: its lock screen streams, so the person can type the password.
+    pub cover: Option<Cover>,
     /// The link's line over the stream ("The link can't keep up with Pro. Lower it in Settings.").
     pub link_line: Option<String>,
     /// "Reconnecting to …" while the session is carried by a reconnect.
@@ -174,6 +201,13 @@ pub struct StreamModel {
     pub rtt_ms: f64,
 }
 
+/// A cover over the stream: LockedMac.title and LockedMac.detail.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cover {
+    pub title: String,
+    pub detail: Option<String>,
+}
+
 /// This PC's own preferences, persisted by the controller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preferences {
@@ -185,7 +219,12 @@ pub struct Preferences {
 
 impl Default for Preferences {
     fn default() -> Self {
-        Preferences { mute: false, share_clipboard: true, reverse_scrolling: false, windows_key_is_command: false }
+        Preferences {
+            mute: false,
+            share_clipboard: true,
+            reverse_scrolling: false,
+            windows_key_is_command: false,
+        }
     }
 }
 

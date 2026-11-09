@@ -7,7 +7,10 @@ use crate::controller::Handles;
 use crate::model::{AppModel, Command};
 
 pub fn start(case: &str) -> Handles {
-    let mut model = AppModel { device_name: "SAMPLE-PC (Windows)".into(), ..Default::default() };
+    let mut model = AppModel {
+        device_name: "SAMPLE-PC (Windows)".into(),
+        ..Default::default()
+    };
     let video = crate::model::VideoSlot::default();
     if !crate::ui::connect::mock_case(case, &mut model) {
         crate::ui::stream::mock_case(case, &mut model, &video);
@@ -18,6 +21,9 @@ pub fn start(case: &str) -> Handles {
             eprintln!("mock: command {c:?}");
         }
     });
-    Handles { shared: Arc::new(Mutex::new(model)), commands: tx, video }
+    Handles {
+        shared: Arc::new(Mutex::new(model)),
+        commands: tx,
+        video,
+    }
 }
-

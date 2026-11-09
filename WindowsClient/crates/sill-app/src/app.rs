@@ -33,8 +33,14 @@ impl Harness {
                 Some((p.to_string(), t.parse().ok()?))
             })
             .collect();
-        let quit_after = std::env::var("SILL_TEST_QUIT_AFTER").ok().and_then(|v| v.parse().ok());
-        Harness { started: std::time::Instant::now(), shots, quit_after }
+        let quit_after = std::env::var("SILL_TEST_QUIT_AFTER")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        Harness {
+            started: std::time::Instant::now(),
+            shots,
+            quit_after,
+        }
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
@@ -76,6 +82,11 @@ impl SillApp {
             Ok(case) => ui::mock::start(&case),
             Err(_) => controller::start(waker),
         };
+        // TEST ONLY: SILL_TEST_CONNECT=<Mac ID> connects to that saved Mac at launch, as a click
+        // on its row does (headless end-to-end runs).
+        if let Ok(id) = std::env::var("SILL_TEST_CONNECT") {
+            let _ = handles.commands.send(Command::Connect(format!("saved:{id}")));
+        }
         SillApp {
             shared: handles.shared,
             commands: handles.commands,
@@ -92,7 +103,9 @@ impl eframe::App for SillApp {
         let model = self.shared.lock().map(|m| m.clone()).unwrap_or_default();
         match model.screen {
             Screen::Connect => self.connect.show(ui, &model, &self.commands),
-            Screen::Stream => self.stream.show(ui, frame, &model, &self.commands, &self.video),
+            Screen::Stream => self
+                .stream
+                .show(ui, frame, &model, &self.commands, &self.video),
         }
         self.harness.tick(ui.ctx());
     }

@@ -545,6 +545,15 @@ fn this_pc_group(ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>) {
         "Off: Ctrl does what Command does on the Mac, so Ctrl+C copies. On: the Windows key is Command.",
         false,
     );
+    ui.add_space(6.0);
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!("Sill for Windows {}", env!("CARGO_PKG_VERSION")))
+                .size(theme::TEXT_SMALL)
+                .color(theme::MUTED),
+        )
+        .wrap(),
+    );
 }
 
 fn foot(ui: &mut egui::Ui, mac: &str) -> bool {

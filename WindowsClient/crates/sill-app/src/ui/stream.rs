@@ -227,9 +227,10 @@ impl StreamUi {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // The decoder gives sRGB-encoded BGRA; the Srgb view makes egui's shader decode
-                // it as it does its own textures, so colors match.
-                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                // The decoder gives sRGB-encoded BGRA, and egui samples every texture as gamma space
+                // (its shader does the sRGB work). An Srgb view would decode it a second time and
+                // draw the whole picture too dark.
+                format: wgpu::TextureFormat::Bgra8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });

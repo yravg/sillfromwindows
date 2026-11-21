@@ -1,5 +1,10 @@
 # Sill
 
+> **Sill for Windows:** this fork adds a Rust/egui Windows client in `WindowsClient/` and its
+> plan in `docs/windows-client/`. Read `AGENTS.md` and `HANDOFF.md` before changing them; the
+> Apple conventions below govern `Sources/` and `iOSClient/`. Keep those files and the README
+> credit through upstream merges.
+
 Open-source, free app that streams individual Mac app windows to iPhone and iPad
 (designed for iPhone Duo first), with a free Mac companion. Tip jar, no
 subscription, no servers. Read `docs/BRIEF.md` before doing product-level work.

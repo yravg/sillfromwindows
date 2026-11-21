@@ -6,6 +6,8 @@
 > documentation. Its home is [Saffsanity/sill](https://github.com/Saffsanity/sill), and this
 > fork follows it for everything outside [`WindowsClient/`](WindowsClient/) — the Windows
 > client this fork adds. If Sill is useful to you, star and support the original.
+>
+> Working on this fork? Start with [AGENTS.md](AGENTS.md) and [HANDOFF.md](HANDOFF.md).
 
 Any window from your Mac, on your iPhone and iPad.
 

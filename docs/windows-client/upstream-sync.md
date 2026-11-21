@@ -6,16 +6,20 @@ upstream `main` plus one commit per sync that carries the fork's only additions:
 - `WindowsClient/` — the Windows client.
 - `docs/windows-client-plan.md`, `docs/windows-client/` — its plan, coverage matrix and wire spec.
 - The credit at the top of `README.md` and `NOTICE`.
+- `AGENTS.md`, `AGENT.md`, `HANDOFF.md`, `WindowsClient/AGENTS.md` and the mock screenshots in
+  `docs/windows-client/screenshots/`.
+- A four-line Windows pointer at the top of `CLAUDE.md`.
 
-Upstream files are not edited. That keeps every future sync a normal merge.
+Upstream code is not edited. Two upstream files carry fork lines — the README credit and the
+CLAUDE.md pointer — so keep both at the top when merging; everything else is a normal merge.
 
 ## This sync
 
 - **Base:** upstream `main` `c33d105` (2026-11-20, "Privacy: lock this Mac when the last device
   leaves"). The previous fork was a squashed snapshot of `41e8cb8` (2026-11-09), 376 commits
   behind.
-- **Carried over unchanged:** `WindowsClient/` (including this PC's stream colour fix) and the
-  three Windows docs.
+- **Carried over:** `WindowsClient/` (including this PC's stream colour fix) and the Windows docs;
+  the agent handoff pack and mock screenshots were added after the sync.
 - **Upstream moved from 0.6.0 to 0.6.3**, and added Privacy mode (lock the Mac when the last device
   leaves), the Desktop's displays (kind 47 `nextDisplay`), the off-console view, one-click update,
   Picture in Picture, full screen, away-through-relay, VPN address keeping, and the lean `CLAUDE.md`.

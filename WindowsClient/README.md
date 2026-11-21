@@ -3,7 +3,8 @@
 > A fork of [Sill](https://github.com/Saffsanity/sill), which is the work of
 > [Noah Saffer (@Saffsanity)](https://github.com/Saffsanity) and the Sill contributors. Everything
 > outside `WindowsClient/` in this repository is theirs; this folder is the Windows client the fork
-> adds.
+> adds. Agents and maintainers: read [`../AGENTS.md`](../AGENTS.md) and
+> [`../HANDOFF.md`](../HANDOFF.md) first.
 
 A viewer for Sill for Mac on Windows 10 and 11: pair once with the Mac's code, then stream one of its
 windows, or the Desktop, and use it with this PC's mouse and keyboard, at home or through

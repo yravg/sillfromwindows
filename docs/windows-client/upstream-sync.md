@@ -25,15 +25,16 @@ Upstream files are not edited. That keeps every future sync a normal merge.
 The framing reader maps an unknown kind to `Unknown(n)` and skips it by length, and serde ignores
 unknown JSON fields, so the additive changes do not break an older Windows build:
 
-- `nextDisplay` (kind 47): this client never sends it, so a current host never sends it one.
+- `nextDisplay` (kind 47): the Windows Desktop button now sends it while the Desktop streams on a
+  Mac with two stops or more; the button reads "Desktop 2" and shows a dot per stop.
 - `Hello.offConsoleView`: this client does not send it, so the host behaves as it does for any older
   device (the locked list, no windows).
 - `Goodbye.restarting`: carries the Mac's `message` and `reconnect: true`; the client's unknown-reason
   path already shows the Mac's words and reconnects (`controller/words.rs`).
 
-These are **wire compatibility**, not feature parity. New applies-to-Windows features (Privacy mode,
-the Desktop's displays, one-click update) still need a Windows pass; the coverage matrix is where
-that work is tracked.
+These are **wire compatibility**, not feature parity. The Desktop's displays are now ported; Privacy
+mode and one-click update are host-side and need no client work. The off-console view remains
+Windows work for later; the coverage matrix tracks it.
 
 ## The next sync
 

@@ -701,6 +701,11 @@ impl Controller {
                     self.publish_ledger();
                 }
             }
+            Command::NextDisplay => {
+                if self.live.is_some() {
+                    self.send(MessageKind::NextDisplay, Vec::new());
+                }
+            }
             Command::FetchMenu { id, title } => {
                 let token = self.menu_token(&id);
                 let m = FetchMenu {
@@ -1305,6 +1310,9 @@ impl Controller {
             s.mac_clipboard = mac_clipboard;
             s.mac_key_repeat = l.key_repeat.unwrap_or(0) >= 1;
             s.mac_gestures = l.gestures.unwrap_or(0) >= 1;
+            s.desktop_displays = l.desktop_displays;
+            s.desktop_display = l.desktop_display;
+            s.desktop_display_names = l.desktop_display_names.clone().unwrap_or_default();
             s.thumbnails.retain(|id, _| window_ids.contains(id));
         });
     }

@@ -248,7 +248,8 @@ older Windows build skips the kinds and ignores the JSON fields it does not know
 
 - **kind 47 `nextDisplay`** (device→host, empty payload): the Desktop button tapped while the Desktop
   streams moves to the Mac's next display (`Sources/StreamProtocol/DesktopDisplays.swift`). The
-  Windows client does not send it yet; an older host maps it to `.unknown` and skips it.
+  Windows client sends it when the window list gives two stops or more and names the shown one; an
+  older host maps it to `.unknown` and skips it.
 - **`Hello.offConsoleView`** (optional Int): 1 from a device that shows the off-console view. The
   Windows client sends no value, so the host sends it the old locked list without windows.
 - **`Goodbye.restarting`** (with `message` and `reconnect: true`): the Mac is installing an update by

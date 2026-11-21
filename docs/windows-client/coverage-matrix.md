@@ -164,7 +164,7 @@ line numbers above are for the older snapshot.
 | feature | upstream source | Windows disposition |
 |---|---|---|
 | Privacy mode: lock the Mac when the last device leaves | `Sources/SillHost/PrivacyLock.swift`, `PrivacyPolicy.swift`, `ScreenLocker.swift`; issue #184, PR #402 | keep: host-side. The client already shows the locked cover and a locked list; no wire change. |
-| Desktop displays: the Desktop button steps through the Mac's displays | `Sources/StreamProtocol/DesktopDisplays.swift`; kind 47 `nextDisplay`; issue #91, PR #173/#355 | adapt, not built: send kind 47 when the Desktop is active and `WindowList.desktopDisplays >= 2`; older hosts skip it. |
+| Desktop displays: the Desktop button steps through the Mac's displays | `Sources/StreamProtocol/DesktopDisplays.swift`; kind 47 `nextDisplay`; issue #91, PR #173/#355 | keep, built 2026-11-21: the button reads "Desktop N" with a dot per stop and sends kind 47 while the Desktop streams; older hosts skip it. |
 | Off-console view: show a session while another user is on the Mac | `Hello.offConsoleView`, `WindowList.offConsoleView`; PR #316/#340 | adapt later: opt in through the hello; privacy-sensitive, so decide it with Enrico. |
 | One-click update: the Mac installs an update by itself | `Goodbye.restarting`; PRs #354/#372–#376 | keep: the unknown-reason path shows the Mac's message and reconnects (`reconnect: true`). |
 | Picture in Picture and full screen | `iOSClient`; PR #353/#360 | drop: iOS-only surfaces. |

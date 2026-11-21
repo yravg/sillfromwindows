@@ -92,6 +92,14 @@ pub struct WindowList {
     pub locked: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub off_console: Option<bool>,
+    /// DesktopDisplays: how many stops the Desktop has (2 or more) and which one it shows, from 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_displays: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_display: Option<i64>,
+    /// Each stop's name, in that order, for the button's tooltip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_display_names: Option<Vec<String>>,
 }
 
 /// `LockedMac.Why` (Switcher.swift:95-109).

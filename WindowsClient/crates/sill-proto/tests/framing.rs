@@ -98,16 +98,17 @@ fn every_kind_number_0_to_44_that_exists() {
         (32, MessageKind::Clipboard),
         (43, MessageKind::Audio),
         (44, MessageKind::KeyframeRequest),
+        (47, MessageKind::NextDisplay),
     ];
     for (n, k) in known {
         assert_eq!(MessageKind::from_u8(*n), *k, "kind {n}");
         assert_eq!(k.as_u8(), *n);
         assert!(k.direction().is_some());
     }
-    // 29-31 and 33-42 are unknown (skipped), and so is anything above 44, 255 included.
+    // 29-31, 33-42, 45, 46, 48 and up are unknown (skipped), 255 included.
     for n in (29..=31)
         .chain(33..=42)
-        .chain([45, 100, 200, 201, 254, 255])
+        .chain([45, 46, 48, 100, 200, 201, 254, 255])
     {
         assert_eq!(MessageKind::from_u8(n), MessageKind::Unknown(n), "kind {n}");
         assert_eq!(MessageKind::Unknown(n).as_u8(), n);

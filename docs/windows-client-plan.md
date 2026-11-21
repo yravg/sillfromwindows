@@ -237,3 +237,10 @@ under it. One owner per file.
   goodbye carries its message and `reconnect`, which the session already follows for unknown
   reasons). What applies to Windows is tracked in `docs/windows-client/upstream-sync.md`; this sync
   does not claim feature parity with the new iOS releases.
+
+- 2026-11-21: the stream screen's UI now follows the iPad's: the 86 pt bar (78 compact) with 66 pt
+  icon-and-label buttons, 104×66 window thumbnails with app badges and an active halo, Segoe UI as
+  the UI face, and a 360 pt Settings panel on the original's 12 pt group cards with real switches,
+  segmented controls, footnotes and a pinned Disconnect. The Desktop's displays are ported: the
+  button reads "Desktop N" with a dot per stop and sends kind 47 while the Desktop streams. The
+  video picture now renders at its own gamma (the old sRGB texture darkened it a second time).

@@ -4,3 +4,4 @@ pub mod menus;
 pub mod mock;
 pub mod settings;
 pub mod stream;
+pub mod widgets;

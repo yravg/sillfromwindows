@@ -54,6 +54,8 @@ pub enum Command {
     },
     /// Kind 17 (through the settings ledger).
     ChangeSettings(HostSettingsChange),
+    /// Kind 47: the Desktop button while the Desktop streams; the Mac's next display.
+    NextDisplay,
     /// Kind 27 / 25: the Mac's menus.
     FetchMenu {
         id: String,
@@ -191,6 +193,10 @@ pub struct StreamModel {
     pub mac_key_repeat: bool,
     /// The Mac takes trackpad gestures (WindowList.gestures >= 1).
     pub mac_gestures: bool,
+    /// DesktopDisplays: the Desktop's stops, the one shown (from 1), and their names.
+    pub desktop_displays: Option<i64>,
+    pub desktop_display: Option<i64>,
+    pub desktop_display_names: Vec<String>,
     /// Diagnostics: decoded frames a second and the round trip in ms (no frame age: the Mac's
     /// clock is not this PC's).
     pub fps: f64,

@@ -13,18 +13,14 @@ use sill_proto::switcher::{StreamSource, WindowAction, WindowInfo};
 
 use super::menus::{self, MenusUi};
 use super::settings::SettingsUi;
+use super::widgets::{self, Icon};
 
 use crate::input::{self, Cfg, InputState};
 use crate::model::{AppModel, Command, Cover, Picture, Screen, VideoFrame, VideoSlot};
-use crate::theme;
-
-const DRAWER_WIDTH: f32 = 320.0;
-const SETTINGS_WIDTH: f32 = 360.0;
+use crate::theme::{self, BarMetrics};
 /// Aa's detents (TextScale.swift): Off, then 0.5× to 1.5× in quarter steps.
 const SCALES: [f64; 5] = [0.5, 0.75, 1.0, 1.25, 1.5];
-const BTN_W: f32 = 84.0;
-const THUMB_H: f32 = 40.0;
-const ROW_H: f32 = 44.0;
+const ROW_H: f32 = 50.0;
 /// The panel's size must be steady this long before a viewport goes out (StreamScreen.swift sends
 /// it "after layout settles, 0.25 s").
 const VIEWPORT_SETTLE: f64 = 0.25;
@@ -117,21 +113,22 @@ impl StreamUi {
         self.upload(video);
         let thumbs = self.prepare_textures(&ctx, model);
         self.sync_order(&model.stream.windows);
+        let m = BarMetrics::for_width(ui.max_rect().width());
 
         egui::Panel::top("stream-bar")
-            .exact_size(theme::BAR_HEIGHT)
+            .exact_size(m.height)
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(theme::BAR)
-                    .inner_margin(egui::Margin::symmetric(8, 8)),
+                    .inner_margin(egui::Margin::symmetric(m.padding as i8, 0)),
             )
-            .show(ui, |ui| self.bar(ui, model, tx, &thumbs));
+            .show(ui, |ui| self.bar(ui, &m, model, tx, &thumbs));
 
         // Below the bar: the picture, and over it (not beside it, so the viewport the Mac is told
         // never changes) the Apps drawer and the Settings panel, as on iOS.
         let rest = ui.available_rect_before_wrap();
-        self.overlays(&ctx, rest, model, tx);
+        self.overlays(&ctx, rest, &m, model, tx);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(LETTERBOX))
@@ -142,6 +139,7 @@ impl StreamUi {
         &mut self,
         ctx: &egui::Context,
         rest: Rect,
+        m: &BarMetrics,
         model: &AppModel,
         tx: &Sender<Command>,
     ) {
@@ -160,32 +158,26 @@ impl StreamUi {
                 });
             egui::Area::new(Id::unique("drawer"))
                 .order(egui::Order::Foreground)
-                .fixed_pos(rest.min)
+                .fixed_pos(pos2(rest.left() + 12.0, rest.top() + 10.0))
                 .show(ctx, |ui| {
-                    egui::Frame::new()
-                        .fill(theme::PANEL)
-                        .inner_margin(egui::Margin::same(12))
-                        .show(ui, |ui| {
-                            ui.set_width(DRAWER_WIDTH - 24.0);
-                            ui.set_height(rest.height() - 24.0);
-                            self.drawer_ui(ui, model, tx);
-                        });
+                    widgets::panel_frame().show(ui, |ui| {
+                        ui.set_width(m.drawer_w - 28.0);
+                        ui.set_height(rest.height() - 34.0);
+                        self.drawer_ui(ui, model, tx);
+                    });
                 });
         }
         if self.settings {
             let mut keep = true;
             egui::Area::new(Id::unique("settings"))
                 .order(egui::Order::Foreground)
-                .fixed_pos(pos2(rest.right() - SETTINGS_WIDTH, rest.top()))
+                .fixed_pos(pos2(rest.right() - m.settings_w - 12.0, rest.top() + 10.0))
                 .show(ctx, |ui| {
-                    egui::Frame::new()
-                        .fill(theme::PANEL)
-                        .inner_margin(egui::Margin::same(12))
-                        .show(ui, |ui| {
-                            ui.set_width(SETTINGS_WIDTH - 24.0);
-                            ui.set_height(rest.height() - 24.0);
-                            keep = self.settings_ui.show(ui, model, tx);
-                        });
+                    widgets::panel_frame().show(ui, |ui| {
+                        ui.set_width(m.settings_w - 28.0);
+                        ui.set_height(rest.height() - 34.0);
+                        keep = self.settings_ui.show(ui, model, tx);
+                    });
                 });
             if !keep {
                 self.settings = false;
@@ -509,18 +501,37 @@ impl StreamUi {
 
     // ---- bar -----------------------------------------------------------------------------
 
-    fn bar(&mut self, ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>, tex: &Textures) {
+    fn bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        m: &BarMetrics,
+        model: &AppModel,
+        tx: &Sender<Command>,
+        tex: &Textures,
+    ) {
         let s = &model.stream;
         let has_menus = menus::available(model);
         let right = 3 + usize::from(has_menus) + usize::from(s.mac_gestures);
+        ui.spacing_mut().item_spacing.x = m.gap;
         ui.horizontal_centered(|ui| {
-            if bar_button(ui, "Apps", self.drawer, "Open or close the app list", true).clicked() {
+            if widgets::bar_button(
+                ui,
+                m,
+                Some(Icon::Search),
+                "Apps",
+                self.drawer,
+                true,
+                "Open or close the app list",
+            )
+            .clicked()
+            {
+                self.settings = false;
                 self.drawer = !self.drawer;
                 self.drawer_focus = self.drawer;
             }
-            let strip_w = (ui.available_width() - right as f32 * (BTN_W + theme::GAP)).max(0.0);
+            let strip_w = (ui.available_width() - right as f32 * (m.button_w + m.gap)).max(0.0);
             ui.allocate_ui_with_layout(
-                vec2(strip_w, THUMB_H),
+                vec2(strip_w, m.height),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     egui::ScrollArea::horizontal()
@@ -528,12 +539,27 @@ impl StreamUi {
                         .auto_shrink([false, false])
                         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| self.thumbnails(ui, model, tx, tex))
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = m.thumb_spacing;
+                                self.thumbnails(ui, m, model, tx, tex);
+                            });
                         });
                 },
             );
             if has_menus {
-                let r = bar_button(ui, "Menus", false, &format!("{}’s menus", s.mac_name), true);
+                let r = widgets::bar_button(
+                    ui,
+                    m,
+                    Some(Icon::Menu),
+                    "Menus",
+                    false,
+                    true,
+                    &format!("{}’s menus", s.mac_name),
+                );
+                if r.clicked() {
+                    self.drawer = false;
+                    self.settings = false;
+                }
                 let file = self.test_open.iter().any(|o| o == "menufile");
                 self.popup(ui, &r, "menu", |this, ui| {
                     if file {
@@ -544,25 +570,73 @@ impl StreamUi {
                 });
             }
             if s.mac_gestures {
-                let r = bar_button(
+                let r = widgets::bar_button(
                     ui,
+                    m,
+                    Some(Icon::Command),
                     "Mac",
                     false,
-                    "Mac actions: Mission Control, Spaces…",
                     true,
+                    "Mac actions: Mission Control, Spaces…",
                 );
+                if r.clicked() {
+                    self.drawer = false;
+                    self.settings = false;
+                }
                 self.popup(ui, &r, "mac", |_, ui| gesture_menu(ui, tx));
             }
-            self.aa_button(ui, model, tx);
+            self.aa_button(ui, m, model, tx);
             let desktop = matches!(s.active, Some(StreamSource::Desktop));
-            if bar_button(ui, "Desktop", desktop, "Show the whole desktop", true).clicked() {
-                let _ = tx.send(Command::Pick(StreamSource::Desktop));
+            let face = widgets::desktop_face(
+                s.desktop_displays,
+                s.desktop_display,
+                &s.desktop_display_names,
+                desktop,
+            );
+            let hint = match &face.value {
+                Some(v) => format!("{} · {}", face.hint, v),
+                None => face.hint.clone(),
+            };
+            let r = widgets::bar_button(
+                ui,
+                m,
+                Some(Icon::Desktop),
+                &face.label,
+                desktop,
+                true,
+                &hint,
+            );
+            widgets::draw_desktop_stops(ui.painter(), r.rect, &face, 4.0);
+            if r.clicked() {
+                self.drawer = false;
+                self.settings = false;
+                let _ = tx.send(if face.steps {
+                    Command::NextDisplay
+                } else {
+                    Command::Pick(StreamSource::Desktop)
+                });
             }
             let hint = format!("Settings for {}", s.mac_name);
-            if bar_button(ui, "Settings", self.settings, &hint, true).clicked() {
+            if widgets::bar_button(
+                ui,
+                m,
+                Some(Icon::Gear),
+                "Settings",
+                self.settings,
+                true,
+                &hint,
+            )
+            .clicked()
+            {
+                self.drawer = false;
                 self.settings = !self.settings;
             }
         });
+        let r = ui.max_rect();
+        ui.painter().line_segment(
+            [r.left_bottom(), r.right_bottom()],
+            Stroke::new(1.0, Color32::from_black_alpha(160)),
+        );
     }
 
     /// A menu popup under a bar button; TEST ONLY: opened at start when SILL_TEST_STREAM_OPEN says.
@@ -585,22 +659,37 @@ impl StreamUi {
                 self.test_open.remove(at);
             }
         }
-        p.show(|ui| content(self, ui));
+        p.show(|ui| {
+            // A menu's rows are 30 pt, not the 44 pt a settings row uses.
+            ui.spacing_mut().interact_size.y = 30.0;
+            ui.set_min_width(120.0);
+            content(self, ui)
+        });
     }
 
     /// Aa (B04): usable only while a window streams; the value stays for the next window.
-    fn aa_button(&mut self, ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>) {
+    fn aa_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        m: &BarMetrics,
+        model: &AppModel,
+        tx: &Sender<Command>,
+    ) {
         let usable = aa_selectable(model.stream.active);
         let offered = aa_offers_off(model);
-        let label = format!("Aa {}", aa_title(self.aa, offered));
+        let label = aa_title(self.aa, offered);
         let hint = if usable {
             "Text size"
         } else {
             "Text size, available for a window"
         };
-        let r = bar_button(ui, &label, false, hint, usable);
+        let r = widgets::bar_text_button(ui, m, "Aa", &label, false, usable, hint);
         if !usable {
             return;
+        }
+        if r.clicked() {
+            self.drawer = false;
+            self.settings = false;
         }
         let mut chosen: Option<Option<f64>> = None;
         let cur = self.aa;
@@ -632,6 +721,7 @@ impl StreamUi {
     fn thumbnails(
         &mut self,
         ui: &mut egui::Ui,
+        m: &BarMetrics,
         model: &AppModel,
         tx: &Sender<Command>,
         tex: &Textures,
@@ -640,33 +730,41 @@ impl StreamUi {
         let mut rects: Vec<(u32, Rect)> = Vec::new();
         let mut dropped: Option<(u32, Pos2)> = None;
         let order = self.order.clone();
+        // The active halo and the badge reach 5–6 pt outside a thumbnail; keep them unclipped.
+        ui.add_space(6.0);
         for id in order {
             let Some(w) = s.windows.iter().find(|w| w.id == id) else {
                 continue;
             };
-            let aspect = if w.height > 0 {
-                w.width as f32 / w.height as f32
-            } else {
-                1.6
-            };
-            let width = (THUMB_H * aspect).clamp(48.0, 96.0);
             let (rect, resp) =
-                ui.allocate_exact_size(vec2(width, THUMB_H), Sense::click_and_drag());
+                ui.allocate_exact_size(vec2(m.thumb_w, m.thumb_h), Sense::click_and_drag());
             rects.push((id, rect));
             let active = matches!(s.active, Some(StreamSource::Window(a)) if a == id);
-            let label = format!("{}, {}", w.title, w.app_name);
+            let label = format!(
+                "{} window: {}{}",
+                w.app_name,
+                w.title,
+                if active { ", showing now" } else { "" }
+            );
             resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
-            draw_thumbnail(
+            let pic = s
+                .thumbnails
+                .get(&id)
+                .and_then(|p| tex.thumbs.get(&id).map(|h| (h, p.width, p.height)));
+            widgets::thumbnail(
                 ui,
                 rect,
+                m,
                 w,
-                tex.thumbs.get(&id),
+                pic,
                 tex.icons.get(&w.bundle_id),
                 active,
                 resp.hovered() || resp.dragged(),
             );
             let resp = resp.on_hover_text(format!("{} — {}", w.title, w.app_name));
             if resp.clicked() {
+                self.drawer = false;
+                self.settings = false;
                 let _ = tx.send(Command::Pick(StreamSource::Window(id)));
             }
             if resp.drag_stopped() {
@@ -691,6 +789,7 @@ impl StreamUi {
                 }
             });
         }
+        ui.add_space(6.0);
         if let Some((id, p)) = dropped {
             if let Some(from) = self.order.iter().position(|x| *x == id) {
                 let target = rects
@@ -708,14 +807,36 @@ impl StreamUi {
 
     fn drawer_ui(&mut self, ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>) {
         let s = &model.stream;
-        let search = egui::TextEdit::singleline(&mut self.search)
-            .id(Id::unique("drawer-search"))
-            .hint_text(format!("Search apps on {}", s.mac_name))
-            .desired_width(f32::INFINITY)
-            .margin(vec2(10.0, 8.0));
-        let field = ui.add(search);
-        if std::mem::take(&mut self.drawer_focus) {
-            field.request_focus();
+        let mut field = None;
+        egui::Frame::new()
+            .fill(theme::CONTROL)
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    widgets::draw_icon(
+                        ui.painter(),
+                        Rect::from_center_size(
+                            pos2(ui.cursor().left() + 8.0, ui.cursor().center().y),
+                            vec2(16.0, 16.0),
+                        ),
+                        Icon::Search,
+                        theme::MUTED,
+                    );
+                    ui.add_space(24.0);
+                    let search = egui::TextEdit::singleline(&mut self.search)
+                        .id(Id::unique("drawer-search"))
+                        .hint_text(format!("Search apps on {}", s.mac_name))
+                        .desired_width(f32::INFINITY)
+                        .frame(egui::Frame::NONE);
+                    field = Some(ui.add(search));
+                });
+            });
+        if let Some(field) = field {
+            if std::mem::take(&mut self.drawer_focus) {
+                field.request_focus();
+            }
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.drawer = false;
@@ -900,54 +1021,12 @@ fn gesture_menu(ui: &mut egui::Ui, tx: &Sender<Command>) {
 
 // ---- small drawing helpers ---------------------------------------------------------------
 
-fn bar_button(
-    ui: &mut egui::Ui,
-    label: &str,
-    open: bool,
-    hint: &str,
-    enabled: bool,
-) -> egui::Response {
-    let sense = if enabled {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(vec2(BTN_W, THUMB_H), sense);
-    resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, hint));
-    let fill = if open || (enabled && resp.hovered()) {
-        theme::CONTROL_OPEN
-    } else {
-        theme::CONTROL
-    };
-    // Dimmed to 35 % when unusable, as Aa is over the Desktop (StreamScreen.swift).
-    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.35) };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fade(fill));
-    if resp.has_focus() {
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::same(theme::RADIUS),
-            Stroke::new(2.0, theme::ACCENT),
-            StrokeKind::Inside,
-        );
-    }
-    let color = fade(if open {
-        theme::ACCENT
-    } else {
-        theme::BAR_LABEL
-    });
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(13.0),
-        color,
-    );
-    resp.on_hover_text(hint)
-}
-
 fn section(ui: &mut egui::Ui, title: &str) {
-    ui.label(RichText::new(title).size(12.0).color(theme::MUTED).strong());
+    ui.label(
+        RichText::new(title)
+            .size(theme::TEXT_GROUP)
+            .color(theme::MUTED),
+    );
 }
 
 fn app_row(
@@ -967,11 +1046,10 @@ fn app_row(
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
-    let ir = Rect::from_center_size(pos2(rect.left() + 26.0, rect.center().y), vec2(28.0, 28.0));
-    draw_icon(ui.painter(), ir, name, icon);
-    let x = rect.left() + 52.0;
+    ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
+    let ir = Rect::from_center_size(pos2(rect.left() + 28.0, rect.center().y), vec2(32.0, 32.0));
+    widgets::app_icon(ui, ir, name, icon, 9, 12.0);
+    let x = rect.left() + 54.0;
     let (ny, color) = match sub {
         Some(sub) => {
             ui.painter().text(
@@ -989,87 +1067,10 @@ fn app_row(
         pos2(x, ny),
         Align2::LEFT_CENTER,
         name,
-        FontId::proportional(14.0),
+        FontId::proportional(15.0),
         color,
     );
     resp
-}
-
-/// App icon, or the two-letter badge (D05).
-fn draw_icon(p: &egui::Painter, r: Rect, name: &str, icon: Option<&TextureHandle>) {
-    match icon {
-        Some(h) => {
-            p.image(
-                h.id(),
-                r,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        }
-        None => {
-            p.rect_filled(r, CornerRadius::same(7), theme::ICON_FALLBACK);
-            let badge: String = name
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .take(2)
-                .collect::<String>()
-                .to_uppercase();
-            p.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                badge,
-                FontId::proportional(11.0),
-                theme::BAR_LABEL,
-            );
-        }
-    }
-}
-
-fn draw_thumbnail(
-    ui: &egui::Ui,
-    rect: Rect,
-    w: &WindowInfo,
-    thumb: Option<&TextureHandle>,
-    icon: Option<&TextureHandle>,
-    active: bool,
-    lit: bool,
-) {
-    let p = ui.painter();
-    let r = CornerRadius::same(6);
-    match thumb {
-        Some(h) => {
-            p.rect_filled(rect, r, theme::THUMB_BODY);
-            p.image(
-                h.id(),
-                rect,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        }
-        None => {
-            // A placeholder drawn as a window: title bar and body.
-            p.rect_filled(rect, r, theme::THUMB_BODY);
-            let bar = Rect::from_min_size(rect.min, vec2(rect.width(), 9.0));
-            p.rect_filled(
-                bar,
-                CornerRadius {
-                    nw: 6,
-                    ne: 6,
-                    sw: 0,
-                    se: 0,
-                },
-                theme::THUMB_TITLE_BAR,
-            );
-        }
-    }
-    // The app's badge in the corner, as the iOS strip shows it.
-    let badge = Rect::from_min_size(rect.right_bottom() - vec2(16.0, 16.0), vec2(14.0, 14.0));
-    draw_icon(p, badge, &w.app_name, icon);
-    if active {
-        p.rect_stroke(rect, r, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
-    } else if lit {
-        p.rect_stroke(rect, r, Stroke::new(1.0, theme::MUTED), StrokeKind::Inside);
-    }
 }
 
 fn capsule(p: &egui::Painter, anchor: Align2, at: Pos2, text: &str, color: Color32) {
@@ -1163,6 +1164,11 @@ pub fn mock_case(case: &str, model: &mut AppModel, video: &VideoSlot) {
     s.mac_name = "Sample Mac mini".into();
     s.mac_key_repeat = true;
     s.mac_gestures = true;
+    if case == "stream-desktop" {
+        s.desktop_displays = Some(3);
+        s.desktop_display = Some(2);
+        s.desktop_display_names = vec!["Main".into(), "DELL U2723QE".into(), "Sidecar".into()];
+    }
     s.menus = Some(sample_menus(&mut s.menu_items));
     let win = |id, title: &str, app: &str, bundle: &str| WindowInfo {
         id,

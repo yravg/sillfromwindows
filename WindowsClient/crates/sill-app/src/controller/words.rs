@@ -362,6 +362,9 @@ mod tests {
             key_repeat: None,
             locked,
             off_console: off,
+            desktop_displays: None,
+            desktop_display: None,
+            desktop_display_names: None,
         };
         assert_eq!(list(None, None).locked_why(), None);
         assert_eq!(list(Some(true), None).locked_why(), Some(ScreenLocked));

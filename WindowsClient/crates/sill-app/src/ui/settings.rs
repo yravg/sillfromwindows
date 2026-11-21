@@ -14,6 +14,7 @@ use sill_proto::settings::{
     StreamSettings,
 };
 
+use super::widgets;
 use crate::model::{AppModel, Command, Preference};
 use crate::theme;
 
@@ -21,7 +22,7 @@ use crate::theme;
 /// (HostSettingsPanel.swift:172-175).
 const OLDER_MAC_AFTER: Duration = Duration::from_secs(2);
 /// Room kept under the scrolling middle for the pinned Disconnect foot.
-const FOOT_HEIGHT: f32 = theme::MIN_TARGET + 2.0 * theme::GAP + 4.0;
+const FOOT_HEIGHT: f32 = theme::MIN_TARGET + 10.0;
 
 #[derive(Default)]
 pub struct SettingsUi {
@@ -50,7 +51,7 @@ impl SettingsUi {
         if self.header(ui, model, mac, state, &mut open) {
             // header said Done
         }
-        ui.separator();
+        ui.add_space(10.0);
 
         let max_h = (ui.available_height() - FOOT_HEIGHT).max(80.0);
         egui::ScrollArea::vertical()
@@ -70,7 +71,7 @@ impl SettingsUi {
                 this_pc_group(ui, model, tx);
             });
 
-        ui.add_space(theme::GAP);
+        ui.add_space(8.0);
         if foot(ui, mac) {
             let _ = tx.send(Command::Disconnect);
         }
@@ -88,26 +89,44 @@ impl SettingsUi {
         let mut done = false;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_max_width((ui.available_width() - 64.0).max(80.0));
-                ui.add(egui::Label::new(RichText::new(mac).heading().strong()).wrap());
+                ui.set_max_width((ui.available_width() - 56.0).max(80.0));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(mac)
+                            .size(theme::TEXT_HEADING)
+                            .color(theme::TEXT),
+                    )
+                    .wrap(),
+                );
                 if let Some(state) = state {
-                    let muted = |t: String| RichText::new(t).small().color(theme::MUTED);
+                    let muted =
+                        |t: String| RichText::new(t).size(theme::TEXT_SMALL).color(theme::MUTED);
                     ui.add(egui::Label::new(muted(readout(state.stream.as_ref()))).wrap());
                     if state.stream.as_ref().is_some_and(|r| r.on_virtual_display) {
                         ui.add(egui::Label::new(muted("On the virtual display".into())).wrap());
                     }
                     if let Some(away) = &state.away {
-                        ui.add(egui::Label::new(muted(away_header(away))).wrap());
+                        if !away_header(away).is_empty() {
+                            ui.add(egui::Label::new(muted(away_header(away))).wrap());
+                        }
                     }
                 }
                 if let Some(why) = &model.stream.locked {
-                    ui.add(egui::Label::new(RichText::new(why).small()).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(why)
+                                .size(theme::TEXT_SMALL)
+                                .color(theme::TEXT),
+                        )
+                        .wrap(),
+                    );
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                let r = ui.add_sized(
-                    [56.0, theme::MIN_TARGET],
-                    egui::Button::new(RichText::new("Done").strong().color(theme::ACCENT)),
+                let r = ui.add(
+                    egui::Button::new(RichText::new("Done").size(15.0).color(theme::ACCENT))
+                        .frame(false)
+                        .min_size(egui::vec2(48.0, 32.0)),
                 );
                 if r.clicked() {
                     done = true;
@@ -162,166 +181,184 @@ fn mac_group(
     };
 
     if state.software_encoder {
-        callout(
+        widgets::callout(
             ui,
             &format!("{mac}’s hardware encoder is busy or not responding, so for now streams run at up to 60 fps at Standard."),
             None,
         );
     }
     if let Some(problem) = &model.stream.settings_problem {
-        callout(ui, problem, None);
+        widgets::callout(ui, problem, None);
     }
     if let Some((text, button)) = link_callout(state.link.as_ref(), state.away.as_ref(), mac) {
-        if let Some(change) = callout(ui, &text, button.as_ref().map(|b| b.0.as_str())) {
-            if change {
-                if let Some((_, c)) = button {
-                    send(c);
-                }
+        if widgets::callout(ui, &text, button.as_ref().map(|b| b.0.as_str())) {
+            if let Some((_, c)) = button {
+                send(c);
             }
         }
     }
 
-    // Quality
-    row(ui, "Quality", mine.bitrate != theirs.bitrate, |ui| {
-        let current = QualityPreset::title_for_bitrate(mine.bitrate);
+    widgets::card(ui, |ui| {
+        // Quality: the name alone in the row, each rate in the menu (the Mac's own 0.6.3 row).
         let mut picked = None;
-        egui::ComboBox::from_id_salt("settings-quality")
-            .selected_text(current)
-            .width(ui.available_width().min(220.0))
-            .show_ui(ui, |ui| {
+        widgets::settings_row(ui, "Quality", mine.bitrate != theirs.bitrate, |ui| {
+            let current = QualityPreset::name_for_bitrate(mine.bitrate);
+            let r = ui.add(
+                egui::Button::new(
+                    RichText::new(format!("{current} ⌄"))
+                        .size(theme::TEXT_ROW)
+                        .color(theme::ACCENT),
+                )
+                .frame(false)
+                .min_size(egui::vec2(0.0, 32.0)),
+            );
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Quality"));
+            egui::Popup::menu(&r).show(|ui| {
+                ui.spacing_mut().interact_size.y = 30.0;
+                ui.set_min_width(190.0);
                 for p in QualityPreset::ALL {
                     let on = p.bitrate() == mine.bitrate;
                     if ui.selectable_label(on, p.title()).clicked() && !on {
                         picked = Some(p.bitrate());
+                        ui.close();
                     }
                 }
-            })
-            .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Quality"));
+            });
+        });
         if let Some(b) = picked {
             send(HostSettingsChange {
                 bitrate: Some(b),
                 ..Default::default()
             });
         }
-    });
-    // Resolution
-    row(
-        ui,
-        "Resolution",
-        mine.capture_scale != theirs.capture_scale,
-        |ui| {
-            let retina = mine.capture_scale >= 1.5;
-            ui.horizontal(|ui| {
-                if segment(ui, "Retina", retina, "Resolution: Retina") && !retina {
-                    send(HostSettingsChange {
-                        capture_scale: Some(2.0),
-                        ..Default::default()
-                    });
-                }
-                if segment(ui, "Standard", !retina, "Resolution: Standard") && retina {
-                    send(HostSettingsChange {
-                        capture_scale: Some(1.0),
-                        ..Default::default()
-                    });
-                }
-            });
-        },
-    );
-    // Frame Rate
-    row(ui, "Frame Rate", mine.max_fps != theirs.max_fps, |ui| {
-        ui.horizontal(|ui| {
-            for fps in [60_i64, 120] {
-                let on = mine.max_fps == fps;
-                if segment(
+        widgets::divider(ui);
+        // Resolution
+        let retina = mine.capture_scale >= 1.5;
+        widgets::settings_row(
+            ui,
+            "Resolution",
+            mine.capture_scale != theirs.capture_scale,
+            |ui| {
+                if let Some(i) = widgets::segmented(
                     ui,
-                    &format!("{fps} fps"),
-                    on,
-                    &format!("Frame Rate: {fps} fps"),
-                ) && !on
-                {
+                    &[("Retina", retina), ("Standard", !retina)],
+                    "Resolution",
+                ) {
+                    let want = if i == 0 { 2.0 } else { 1.0 };
+                    if (want - mine.capture_scale).abs() > 0.01 {
+                        send(HostSettingsChange {
+                            capture_scale: Some(want),
+                            ..Default::default()
+                        });
+                    }
+                }
+            },
+        );
+        widgets::divider(ui);
+        // Frame Rate
+        widgets::settings_row(ui, "Frame Rate", mine.max_fps != theirs.max_fps, |ui| {
+            let fps60 = mine.max_fps == 60;
+            let fps120 = mine.max_fps == 120;
+            if let Some(i) =
+                widgets::segmented(ui, &[("60 fps", fps60), ("120 fps", fps120)], "Frame Rate")
+            {
+                let want = if i == 0 { 60 } else { 120 };
+                if want != mine.max_fps {
                     send(HostSettingsChange {
-                        max_fps: Some(fps),
+                        max_fps: Some(want),
                         ..Default::default()
                     });
                 }
             }
         });
     });
-    footnote(ui, &stream_footer());
+    widgets::footnote(ui, &stream_footer(), false);
     if let Some(note) = state.away.as_ref().and_then(|a| away_footnote(a, mac)) {
-        footnote(ui, &note);
+        widgets::footnote(ui, &note, false);
     }
 
     // Prioritize Encoding Speed
-    if let Some(v) = toggle(
-        ui,
-        "Prioritize Encoding Speed",
-        mine.prioritize_speed,
-        true,
-        mine.prioritize_speed != theirs.prioritize_speed,
-    ) {
-        send(HostSettingsChange {
-            prioritize_speed: Some(v),
-            ..Default::default()
-        });
-    }
-    footnote(
+    widgets::card(ui, |ui| {
+        if let Some(v) = widgets::toggle_row(
+            ui,
+            "Prioritize Encoding Speed",
+            mine.prioritize_speed,
+            true,
+            mine.prioritize_speed != theirs.prioritize_speed,
+        ) {
+            send(HostSettingsChange {
+                prioritize_speed: Some(v),
+                ..Default::default()
+            });
+        }
+    });
+    widgets::footnote(
         ui,
         &format!("Lower latency when {mac} is busy, at a softer picture."),
+        false,
     );
 
     // Virtual Display: off and impossible on this host → disabled with the reason; on, it can
     // always be turned off.
     let unavailable = !state.virtual_display_available && !mine.virtual_display;
-    if let Some(v) = toggle(
-        ui,
-        "Virtual Display",
-        mine.virtual_display,
-        !unavailable,
-        mine.virtual_display != theirs.virtual_display,
-    ) {
-        send(HostSettingsChange {
-            virtual_display: Some(v),
-            ..Default::default()
-        });
-    }
+    widgets::card(ui, |ui| {
+        if let Some(v) = widgets::toggle_row(
+            ui,
+            "Virtual Display",
+            mine.virtual_display,
+            !unavailable,
+            mine.virtual_display != theirs.virtual_display,
+        ) {
+            send(HostSettingsChange {
+                virtual_display: Some(v),
+                ..Default::default()
+            });
+        }
+    });
     if let Some(note) = state.virtual_display_note.as_ref().filter(|_| unavailable) {
-        footnote_warn(ui, note);
+        widgets::footnote(ui, note, true);
     } else {
-        footnote(ui, &format!("The window you pick moves onto an invisible display on {mac} while it streams, so it keeps updating when covered."));
+        widgets::footnote(ui, &format!("The window you pick moves onto an invisible display on {mac} while it streams, so it keeps updating when covered."), false);
     }
-    footnote(
+    widgets::footnote(
         ui,
         &format!("Applies to every device streaming from {mac}. The stream restarts for a moment."),
+        false,
     );
 
-    // Send Audio (Beta), then Mute right under it.
+    // Send Audio (Beta), then Mute right under it in the same card.
     let has_sound = mine.send_audio.is_some();
     let send_audio = mine.send_audio;
-    if let Some(v) = toggle(
-        ui,
-        "Send Audio (Beta)",
-        send_audio.unwrap_or(false),
-        has_sound,
-        mine.send_audio != theirs.send_audio,
-    ) {
-        send(HostSettingsChange {
-            send_audio: Some(v),
-            ..Default::default()
-        });
-    }
-    if has_sound {
-        if let Some(v) = toggle(ui, "Mute", model.prefs.mute, true, false) {
-            let _ = tx.send(Command::SetPreference(Preference::Mute(v)));
+    widgets::card(ui, |ui| {
+        if let Some(v) = widgets::toggle_row(
+            ui,
+            "Send Audio (Beta)",
+            send_audio.unwrap_or(false),
+            has_sound,
+            mine.send_audio != theirs.send_audio,
+        ) {
+            send(HostSettingsChange {
+                send_audio: Some(v),
+                ..Default::default()
+            });
         }
-    }
+        if has_sound {
+            widgets::divider(ui);
+            if let Some(v) = widgets::toggle_row(ui, "Mute", model.prefs.mute, true, false) {
+                let _ = tx.send(Command::SetPreference(Preference::Mute(v)));
+            }
+        }
+    });
     if let Some(note) = &state.audio_note {
-        footnote_warn(ui, note);
+        widgets::footnote(ui, note, true);
     }
-    footnote(ui, &send_audio_footer(send_audio, model.prefs.mute, mac));
+    widgets::footnote(
+        ui,
+        &send_audio_footer(send_audio, model.prefs.mute, mac),
+        false,
+    );
     if !state.persistent {
-        footnote(ui, "SillHost keeps these until it quits.");
+        widgets::footnote(ui, "SillHost keeps these until it quits.", false);
     }
 }
 
@@ -329,28 +366,24 @@ fn mac_group(
 
 fn away_group(ui: &mut egui::Ui, mac: &str, state: &HostSettingsState) {
     let Some(a) = &state.away else { return };
-    group_title(ui, "Away from home");
-    ui.add(
-        egui::Label::new(format!(
-            "Away: {}",
-            whole(&QualityPreset::short_title(
+    widgets::group_title(ui, "Away from home");
+    let muted = |t: String| RichText::new(t).size(theme::TEXT_ROW).color(theme::MUTED);
+    widgets::card(ui, |ui| {
+        widgets::settings_row(ui, "Away", false, |ui| {
+            ui.label(muted(whole(&QualityPreset::short_title(
                 a.away_bitrate,
-                a.away_capture_scale
-            ))
-        ))
-        .wrap(),
-    );
-    ui.add(
-        egui::Label::new(format!(
-            "Home: {}",
-            whole(&QualityPreset::short_title(
+                a.away_capture_scale,
+            ))));
+        });
+        widgets::divider(ui);
+        widgets::settings_row(ui, "Home", false, |ui| {
+            ui.label(muted(whole(&QualityPreset::short_title(
                 a.home_bitrate,
-                a.home_capture_scale
-            ))
-        ))
-        .wrap(),
-    );
-    footnote(
+                a.home_capture_scale,
+            ))));
+        });
+    });
+    widgets::footnote(
         ui,
         &format!(
             "Away from home, {mac} streams at {}.",
@@ -359,6 +392,7 @@ fn away_group(ui: &mut egui::Ui, mac: &str, state: &HostSettingsState) {
                 a.away_capture_scale
             ))
         ),
+        false,
     );
 }
 
@@ -447,152 +481,106 @@ fn link_callout(
 // ---- this PC ----------------------------------------------------------------------------------
 
 fn this_pc_group(ui: &mut egui::Ui, model: &AppModel, tx: &Sender<Command>) {
-    group_title(ui, "This PC");
+    widgets::group_title(ui, "This PC");
     let prefs = &model.prefs;
     let pref = |p: Preference| {
         let _ = tx.send(Command::SetPreference(p));
     };
-    if model.stream.mac_clipboard {
-        if let Some(v) = toggle(ui, "Share Clipboard", prefs.share_clipboard, true, false) {
-            pref(Preference::ShareClipboard(v));
+    let mac = if model.stream.mac_name.is_empty() {
+        "Mac"
+    } else {
+        model.stream.mac_name.as_str()
+    };
+    widgets::card(ui, |ui| {
+        let mut first = true;
+        if model.stream.mac_clipboard {
+            if let Some(v) =
+                widgets::toggle_row(ui, "Share Clipboard", prefs.share_clipboard, true, false)
+            {
+                pref(Preference::ShareClipboard(v));
+            }
+            first = false;
         }
-        let mac = if model.stream.mac_name.is_empty() {
-            "Mac"
-        } else {
-            model.stream.mac_name.as_str()
-        };
-        footnote(
+        if !first {
+            widgets::divider(ui);
+        }
+        if let Some(v) = widgets::toggle_row(
+            ui,
+            "Reverse Scrolling",
+            prefs.reverse_scrolling,
+            true,
+            false,
+        ) {
+            pref(Preference::ReverseScrolling(v));
+        }
+        widgets::divider(ui);
+        if let Some(v) = widgets::toggle_row(
+            ui,
+            "Windows key is Command",
+            prefs.windows_key_is_command,
+            true,
+            false,
+        ) {
+            pref(Preference::WindowsKeyIsCommand(v));
+        }
+    });
+    if model.stream.mac_clipboard {
+        widgets::footnote(
             ui,
             &if prefs.share_clipboard {
                 format!("Text you copy on {mac} is ready to paste on this PC, and text you copy here is ready to paste on {mac}.")
             } else {
                 format!("Nothing you copy goes between this PC and {mac} while this is off.")
             },
+            false,
         );
     }
-    if let Some(v) = toggle(
-        ui,
-        "Reverse Scrolling",
-        prefs.reverse_scrolling,
-        true,
-        false,
-    ) {
-        pref(Preference::ReverseScrolling(v));
-    }
-    footnote(
+    widgets::footnote(
         ui,
         "Turns the mouse wheel and the trackpad’s two-finger scroll around.",
-    );
-    if let Some(v) = toggle(
-        ui,
-        "Windows key is Command",
-        prefs.windows_key_is_command,
-        true,
         false,
-    ) {
-        pref(Preference::WindowsKeyIsCommand(v));
-    }
-    footnote(
+    );
+    widgets::footnote(
         ui,
         "Off: Ctrl does what Command does on the Mac, so Ctrl+C copies. On: the Windows key is Command.",
+        false,
     );
 }
 
 fn foot(ui: &mut egui::Ui, mac: &str) -> bool {
     let label = format!("Disconnect from {mac}");
-    let r = ui.add(
-        egui::Button::new(RichText::new(&label).color(theme::ACCENT))
-            .wrap()
-            .min_size(egui::vec2(ui.available_width(), theme::MIN_TARGET)),
-    );
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-    r.clicked()
-}
-
-// ---- pieces -----------------------------------------------------------------------------------
-
-fn group_title(ui: &mut egui::Ui, t: &str) {
-    ui.add_space(theme::GAP);
-    ui.add(egui::Label::new(RichText::new(t).strong().color(theme::BAR_LABEL)).wrap());
-}
-
-fn footnote(ui: &mut egui::Ui, t: &str) {
-    ui.add(egui::Label::new(RichText::new(t).small().color(theme::MUTED)).wrap());
-    ui.add_space(theme::GAP / 2.0);
-}
-
-fn footnote_warn(ui: &mut egui::Ui, t: &str) {
-    ui.add(egui::Label::new(RichText::new(t).small().color(theme::PROBLEM)).wrap());
-    ui.add_space(theme::GAP / 2.0);
-}
-
-/// A labelled row: the title (with a spinner while pending), then the control.
-fn row(ui: &mut egui::Ui, title: &str, pending: bool, control: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(title).color(theme::TEXT));
-        if pending {
-            ui.add(egui::Spinner::new().size(12.0));
-        }
-    });
-    control(ui);
-    ui.add_space(theme::GAP / 2.0);
-}
-
-/// A segmented choice; true when clicked.
-fn segment(ui: &mut egui::Ui, text: &str, on: bool, name: &str) -> bool {
-    let r = ui.add(
-        egui::Button::new(RichText::new(text).color(if on { theme::ACCENT } else { theme::TEXT }))
-            .selected(on)
-            .min_size(egui::vec2(0.0, theme::MIN_TARGET)),
-    );
-    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, name));
-    r.clicked()
-}
-
-/// A switch row. Returns the new value when clicked.
-fn toggle(
-    ui: &mut egui::Ui,
-    title: &str,
-    value: bool,
-    enabled: bool,
-    pending: bool,
-) -> Option<bool> {
-    let mut v = value;
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(enabled, |ui| {
-            let r = ui.add(egui::Checkbox::new(&mut v, title));
-            changed = r.changed();
-        });
-        if pending {
-            ui.add(egui::Spinner::new().size(12.0));
-        }
-    });
-    changed.then_some(v)
-}
-
-/// A callout in the problem colour, with an optional action button. Returns Some(true) when the
-/// button was pressed, Some(false) when shown without a click, None when there was no button.
-fn callout(ui: &mut egui::Ui, text: &str, button: Option<&str>) -> Option<bool> {
-    let mut clicked = None;
-    egui::Frame::new()
-        .fill(theme::PROBLEM.gamma_multiply(0.16))
-        .corner_radius(theme::RADIUS)
-        .inner_margin(egui::Margin::same(10))
+    let r = egui::Frame::new()
+        .fill(theme::CONTROL)
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(RichText::new(text.to_string()).small()).wrap());
-            if let Some(b) = button {
-                let r = ui.add(
-                    egui::Button::new(RichText::new(b).color(theme::ACCENT))
-                        .wrap()
-                        .min_size(egui::vec2(ui.available_width(), theme::MIN_TARGET)),
+            ui.set_height(theme::MIN_TARGET);
+            ui.horizontal_centered(|ui| {
+                widgets::draw_icon(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(ui.cursor().left() + 9.0, ui.cursor().center().y),
+                        egui::vec2(18.0, 18.0),
+                    ),
+                    widgets::Icon::XCircle,
+                    theme::ACCENT,
                 );
-                clicked = Some(r.clicked());
-            }
-        });
-    ui.add_space(theme::GAP);
-    clicked
+                ui.add_space(28.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&label)
+                            .size(theme::TEXT_ROW)
+                            .color(theme::ACCENT),
+                    )
+                    .wrap(),
+                );
+            });
+        })
+        .response
+        .interact(egui::Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    r.clicked()
 }
 
 // ---- words ------------------------------------------------------------------------------------

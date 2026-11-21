@@ -112,6 +112,9 @@ fn window_list_full_shape_and_nil_omission() {
         key_repeat: Some(1),
         locked: None,
         off_console: None,
+        desktop_displays: Some(3),
+        desktop_display: Some(2),
+        desktop_display_names: Some(vec!["Main".into(), "DELL U2723QE".into(), "Sidecar".into()]),
     };
     assert_eq!(
         val(&l),
@@ -119,7 +122,8 @@ fn window_list_full_shape_and_nil_omission() {
             "macName": "Mac mini",
             "windows": [{"id": 104, "title": "Doc", "appName": "TextEdit", "bundleID": "com.apple.TextEdit", "width": 800, "height": 600}],
             "active": {"window": {"_0": 104}},
-            "launchID": "L", "hostVersion": "0.4.0", "protocol": 1, "gestures": 1, "clipboard": 1, "keyRepeat": 1
+            "launchID": "L", "hostVersion": "0.4.0", "protocol": 1, "gestures": 1, "clipboard": 1, "keyRepeat": 1,
+            "desktopDisplays": 3, "desktopDisplay": 2, "desktopDisplayNames": ["Main", "DELL U2723QE", "Sidecar"]
         })
     );
     round(&l);
@@ -136,6 +140,9 @@ fn window_list_full_shape_and_nil_omission() {
         key_repeat: None,
         locked: None,
         off_console: None,
+        desktop_displays: None,
+        desktop_display: None,
+        desktop_display_names: None,
     };
     assert_eq!(
         val(&min),

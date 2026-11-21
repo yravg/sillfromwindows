@@ -56,6 +56,8 @@ pub enum MessageKind {
     Clipboard,
     Audio,
     KeyframeRequest,
+    /// 47: the Desktop button tapped while the Desktop streams; empty payload.
+    NextDisplay,
     Unknown(u8),
 }
 
@@ -96,6 +98,7 @@ impl MessageKind {
             32 => Clipboard,
             43 => Audio,
             44 => KeyframeRequest,
+            47 => NextDisplay,
             other => Unknown(other),
         }
     }
@@ -136,6 +139,7 @@ impl MessageKind {
             Clipboard => 32,
             Audio => 43,
             KeyframeRequest => 44,
+            NextDisplay => 47,
             Unknown(n) => n,
         }
     }
@@ -150,7 +154,7 @@ impl MessageKind {
             | MacPointer | Audio => HostToDevice,
             SelectSource | LaunchApp | Input | Viewport | Ping | ClientStats | WindowCommand
             | ChangeSettings | PairRequest | PairingWanted | Hello | PressMenuItem | FetchMenu
-            | Gesture | KeyframeRequest => DeviceToHost,
+            | Gesture | KeyframeRequest | NextDisplay => DeviceToHost,
             Clipboard => Both,
             Unknown(_) => return None,
         })

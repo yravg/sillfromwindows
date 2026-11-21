@@ -1,0 +1,19 @@
+[package]
+name = "sill-net"
+description = "Sill device side: identity, pairing proofs, TLS with pinning."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sill-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+p256.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true

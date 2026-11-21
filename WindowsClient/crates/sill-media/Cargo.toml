@@ -1,0 +1,15 @@
+[package]
+name = "sill-media"
+description = "Sill's media: HEVC and AAC-ELD decoding through FFmpeg loaded at run time, sound playout."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sill-proto.workspace = true
+libloading.workspace = true
+
+# Sound out on Windows (WASAPI). On Linux this machine has no ALSA headers; playout's logic is
+# tested without a device there.
+[target.'cfg(windows)'.dependencies]
+cpal.workspace = true

@@ -1,0 +1,12 @@
+Sill
+Copyright 2026 Noah Saffer and the Sill contributors
+https://github.com/Saffsanity/sill
+
+This repository, Sill for Windows, is a fork of Sill.
+
+Everything outside WindowsClient/ — the Sill for Mac app, the Sill for iPhone and
+iPad app, the StreamProtocol, the design, the documentation and the tests — is
+the work of Noah Saffer and the Sill contributors, under the Apache License 2.0
+in LICENSE. All credit for it belongs to them.
+
+WindowsClient/ is the Windows client added by this fork.

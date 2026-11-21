@@ -1,5 +1,12 @@
 # Sill
 
+> **Sill for Windows is a fork, and 99% of this repository is Noah Saffer's work.**
+> Sill was designed and built by [Noah Saffer (@Saffsanity)](https://github.com/Saffsanity):
+> the Mac app, the iPhone and iPad apps, the wire protocol, the design, the site and the
+> documentation. Its home is [Saffsanity/sill](https://github.com/Saffsanity/sill), and this
+> fork follows it for everything outside [`WindowsClient/`](WindowsClient/) — the Windows
+> client this fork adds. If Sill is useful to you, star and support the original.
+
 Any window from your Mac, on your iPhone and iPad.
 
 Sill shows a window from your Mac, or the whole desktop, on your iPhone or

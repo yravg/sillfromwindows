@@ -90,8 +90,9 @@ Settings.
   payload and session tests with every wire change.
 - **Upstream sync.** Keep `WindowsClient/` and the Windows docs additive. Fetch with
   `git -c http.version=HTTP/1.1 …` on this network, merge `upstream/main`, run the checks, update
-  `HANDOFF.md`. The only upstream file with fork edits is a four-line pointer at the top of
-  `CLAUDE.md` (plus the README credit and `NOTICE`). See `docs/windows-client/upstream-sync.md`.
+  `HANDOFF.md`. The only upstream files with fork lines are the four-line pointer at the top of
+  `CLAUDE.md` and the credit at the top of `README.md`; `NOTICE` is new. See
+  `docs/windows-client/upstream-sync.md`.
 - **Security and privacy.** Never commit `%APPDATA%\Sill`, `identity.key`, `macs.json`, pairing
   codes, keys or real Mac screenshots. Test hooks must stay inert without their environment
   variables. Do not connect to someone's Mac or send input without permission. Do not add

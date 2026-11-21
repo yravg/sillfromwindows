@@ -1,6 +1,8 @@
 # Coverage matrix: iOS client (iOSClient/*.swift) to a Windows desktop viewer
 
-Read-only survey. Source: /home/user/dev/sillfromwindows at branch windows-client (main 41e8cb8). All paths are under `iOSClient/` unless prefixed `Sources/`. Wire kinds are `StreamMessageKind` (Sources/StreamProtocol/StreamMessage.swift:7-94): 0 parameterSets, 1 frame, 2 windowList, 3 thumbnail, 4 appIcon, 5 appList, 6 selectSource, 7 launchApp, 8 input, 9 viewport, 10 ping, 11 pong, 12 clientStats, 13 tick, 14 cursorShape, 15 windowCommand, 16 hostSettings, 17 changeSettings, 18 macInfo, 19 pairRequest, 20 pairResult, 21 pairingWanted, 22 goodbye, 23 hello, 24 macMenu, 25 pressMenuItem, 26 macPointer, 27 fetchMenu, 28 gesture, 32 clipboard, 43 audio, 44 keyframeRequest.
+Read-only survey. Source: /home/user/dev/sillfromwindows at branch windows-client (main 41e8cb8).
+The repository was synced to upstream `main c33d105` (Sill 0.6.3) on 2026-11-21; the rows below keep
+their 41e8cb8 line numbers, and the new upstream features are listed in the last section. All paths are under `iOSClient/` unless prefixed `Sources/`. Wire kinds are `StreamMessageKind` (Sources/StreamProtocol/StreamMessage.swift:7-94): 0 parameterSets, 1 frame, 2 windowList, 3 thumbnail, 4 appIcon, 5 appList, 6 selectSource, 7 launchApp, 8 input, 9 viewport, 10 ping, 11 pong, 12 clientStats, 13 tick, 14 cursorShape, 15 windowCommand, 16 hostSettings, 17 changeSettings, 18 macInfo, 19 pairRequest, 20 pairResult, 21 pairingWanted, 22 goodbye, 23 hello, 24 macMenu, 25 pressMenuItem, 26 macPointer, 27 fetchMenu, 28 gesture, 32 clipboard, 43 audio, 44 keyframeRequest.
 
 Mapping column starts with one of `keep`, `adapt`, `drop` (counted at the end). "unclear" is stated inline where I could not settle it from the code.
 
@@ -153,6 +155,21 @@ Words with `\(mac)` / `\(device)` are templates; the iOS `device` is "iPad"/"iPh
 - design/screenshots/ipad-6.jpg: "Every window, one tap away." Landscape bar with Desktop lit, window lights (Close red, Minimize amber, Full Screen green) shown over the first thumbnail after a hold; bar has no Menus button in this shot (host sent none).
 
 Not viewable from these: tiles style, Add a Mac card, pairing overlay, locked cover, tour, Aa ruler open, clipboard chip, link line (no screenshots exist; the DEBUG MockCatalog cases are the only renders, ContentView.swift:522-1068, MockCatalog.swift:14).
+
+## Upstream additions since 41e8cb8 (synced 2026-11-21)
+
+The rows above survey `41e8cb8` (Sill 0.6.0). Upstream `main c33d105` (Sill 0.6.3) adds these; the
+line numbers above are for the older snapshot.
+
+| feature | upstream source | Windows disposition |
+|---|---|---|
+| Privacy mode: lock the Mac when the last device leaves | `Sources/SillHost/PrivacyLock.swift`, `PrivacyPolicy.swift`, `ScreenLocker.swift`; issue #184, PR #402 | keep: host-side. The client already shows the locked cover and a locked list; no wire change. |
+| Desktop displays: the Desktop button steps through the Mac's displays | `Sources/StreamProtocol/DesktopDisplays.swift`; kind 47 `nextDisplay`; issue #91, PR #173/#355 | adapt, not built: send kind 47 when the Desktop is active and `WindowList.desktopDisplays >= 2`; older hosts skip it. |
+| Off-console view: show a session while another user is on the Mac | `Hello.offConsoleView`, `WindowList.offConsoleView`; PR #316/#340 | adapt later: opt in through the hello; privacy-sensitive, so decide it with Enrico. |
+| One-click update: the Mac installs an update by itself | `Goodbye.restarting`; PRs #354/#372–#376 | keep: the unknown-reason path shows the Mac's message and reconnects (`reconnect: true`). |
+| Picture in Picture and full screen | `iOSClient`; PR #353/#360 | drop: iOS-only surfaces. |
+| Away through relay, keep VPN addresses | `AwayPolicy.swift`, `Remote.swift`, `HostStatus.swift`; PR #339/#349 | keep: the Windows client already dials Tailscale/VPN and learns the Mac's addresses; no wire change. |
+| Quality row on one line, lean `CLAUDE.md`, version labels | iOS settings and docs; PR #363/#388/#351 | drop: no Windows behaviour. |
 
 ## Not run / not checked
 

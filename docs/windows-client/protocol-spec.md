@@ -240,3 +240,21 @@ Also: Swift Codable enum JSON (`_0`) and strict Int decoding (emit integers); a 
 - PairingWindow details (5 tries, 5 min TTL, window opening rules): from comments only; PairingWindow.swift not opened.
 - MacMenuState timeouts and tree-version semantics beyond the wire (iOSClient/MacMenuState.swift not read).
 - ClientStatsReporter device-name format (free text, SafeText-cleaned on the host, <=64 chars).
+
+## 10. Upstream 0.6.3 additions (synced 2026-11-21)
+
+Everything below is additive: the protocol stays 1, the minimum device version stays "0", and an
+older Windows build skips the kinds and ignores the JSON fields it does not know.
+
+- **kind 47 `nextDisplay`** (device→host, empty payload): the Desktop button tapped while the Desktop
+  streams moves to the Mac's next display (`Sources/StreamProtocol/DesktopDisplays.swift`). The
+  Windows client does not send it yet; an older host maps it to `.unknown` and skips it.
+- **`Hello.offConsoleView`** (optional Int): 1 from a device that shows the off-console view. The
+  Windows client sends no value, so the host sends it the old locked list without windows.
+- **`Goodbye.restarting`** (with `message` and `reconnect: true`): the Mac is installing an update by
+  itself and holds new sessions until it has. The client's unknown-reason path already shows the
+  Mac's message and reconnects; no code change.
+- **`WindowList.desktopDisplays`** (optional Int) and **`offConsoleView`** (optional Bool): additive
+  JSON; serde ignores them until the client implements kind 47.
+
+The rest of 0.6.1–0.6.3 is host- or iOS-side; the wire and TLS are unchanged.

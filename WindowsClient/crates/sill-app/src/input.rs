@@ -3,7 +3,7 @@
 //! The wire (Sources/StreamProtocol/Input.swift): positions are fractions of the streamed frame;
 //! pointer buttons are left and right only (no middle, no move-with-button event: a drag is
 //! leftDown, moves, leftUp); a trackpad scroll is `scrollGesture began`, `scroll` deltas,
-//! `scrollGesture ended`, a wheel is bare `scroll` deltas.
+//! `scrollGesture ended`, a wheel notch is eased out as `scroll` deltas inside a began/ended gesture (Glide).
 //!
 //! Keys: a key goes as a HID usage from its physical key (keymap.rs). Whether a character key goes
 //! as a key or as text follows iOSClient's `KeyTyping` (TextComposition.swift): while the Mac says
@@ -23,6 +23,11 @@ pub const LINE_POINTS: f32 = 48.0;
 /// A trackpad gesture with no further deltas for this long has ended (Windows precision touchpads
 /// give no phase through winit).
 pub const GESTURE_IDLE: f64 = 0.15;
+/// Wheel glide: time constant of the ease, how long the gesture stays open after the last notch,
+/// and the remainder (fraction of the picture) below which the rest is sent at once.
+const GLIDE_TAU: f64 = 0.045;
+const GLIDE_HOLD: f64 = 0.08;
+const GLIDE_SETTLE: f64 = 0.0003;
 
 /// Largest rectangle of the frame's aspect ratio centred in `panel`: the picture, letterbox out.
 pub fn video_rect(panel: Rect, frame_w: u32, frame_h: u32) -> Rect {
@@ -83,9 +88,32 @@ pub struct InputState {
     mods: ModTracker,
     gesture_open: bool,
     last_scroll: f64,
+    glide: Glide,
+}
+
+/// A mouse wheel notch eased out over a few frames instead of one jump. The idea and the constants
+/// come from jericho0521's Windows client (Saffsanity/sill PR #207, WheelGlide.cs).
+#[derive(Debug, Default)]
+struct Glide {
+    open: bool,
+    dx: f64,
+    dy: f64,
+    last_tick: f64,
+    last_input: f64,
+}
+
+impl Glide {
+    fn pending(&self) -> bool {
+        self.dx != 0.0 || self.dy != 0.0
+    }
 }
 
 impl InputState {
+    /// A wheel glide is under way: the caller keeps repainting so `tick` runs.
+    pub fn gliding(&self) -> bool {
+        self.glide.open
+    }
+
     #[cfg(test)]
     pub fn anything_held(&self) -> bool {
         !self.held_keys.is_empty()
@@ -144,11 +172,68 @@ impl InputState {
                 y,
             });
         }
+        if std::mem::take(&mut self.glide.open) {
+            let (dx, dy) = (
+                std::mem::take(&mut self.glide.dx),
+                std::mem::take(&mut self.glide.dy),
+            );
+            if dx != 0.0 || dy != 0.0 {
+                out.push(InputEvent::Scroll { x, y, dx, dy });
+            }
+            out.push(InputEvent::ScrollGesture {
+                phase: ScrollPhase::Ended,
+                x,
+                y,
+            });
+        }
         out
     }
 
-    /// End a trackpad gesture that has gone quiet. Call every frame while one is open.
+    /// Ease out the pending wheel scroll and end a trackpad gesture that has gone quiet. Call every
+    /// frame while either is open.
     pub fn tick(&mut self, now: f64) -> Vec<InputEvent> {
+        let mut glided = self.glide_tick(now);
+        glided.extend(self.gesture_tick(now));
+        glided
+    }
+
+    fn glide_tick(&mut self, now: f64) -> Vec<InputEvent> {
+        let g = &mut self.glide;
+        if !g.open {
+            return Vec::new();
+        }
+        let (x, y) = self.last_pos.unwrap_or((0.5, 0.5));
+        let dt = (now - g.last_tick).clamp(0.0, 0.1);
+        g.last_tick = now;
+        let mut out = Vec::new();
+        if g.pending() {
+            let share = if dt <= 0.0 {
+                0.0
+            } else {
+                1.0 - (-dt / GLIDE_TAU).exp()
+            };
+            let (mut dx, mut dy) = (g.dx * share, g.dy * share);
+            if g.dx.abs().max(g.dy.abs()) * (1.0 - share) < GLIDE_SETTLE {
+                (dx, dy) = (g.dx, g.dy);
+            }
+            g.dx -= dx;
+            g.dy -= dy;
+            if dx != 0.0 || dy != 0.0 {
+                out.push(InputEvent::Scroll { x, y, dx, dy });
+            }
+        }
+        if !g.pending() && now - g.last_input >= GLIDE_HOLD {
+            g.open = false;
+            out.push(InputEvent::ScrollGesture {
+                phase: ScrollPhase::Ended,
+                x,
+                y,
+            });
+        }
+        out
+    }
+
+    fn gesture_tick(&mut self, now: f64) -> Vec<InputEvent> {
         if self.gesture_open && now - self.last_scroll > GESTURE_IDLE {
             self.gesture_open = false;
             let (x, y) = self.last_pos.unwrap_or((0.5, 0.5));
@@ -358,7 +443,18 @@ impl InputState {
         let (x, y) = self.last_pos.unwrap_or((0.5, 0.5));
         match unit {
             MouseWheelUnit::Line | MouseWheelUnit::Page => {
-                out.push(InputEvent::Scroll { x, y, dx, dy });
+                if !self.glide.open {
+                    self.glide.open = true;
+                    self.glide.last_tick = f.now;
+                    out.push(InputEvent::ScrollGesture {
+                        phase: ScrollPhase::Began,
+                        x,
+                        y,
+                    });
+                }
+                self.glide.dx += dx;
+                self.glide.dy += dy;
+                self.glide.last_input = f.now;
             }
             MouseWheelUnit::Point => {
                 if phase == TouchPhase::Start && self.gesture_open {
@@ -879,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_notch_is_a_bare_scroll_with_the_natural_sign() {
+    fn wheel_notch_glides_out_with_the_natural_sign_and_all_of_it_arrives() {
         let mut s = InputState::default();
         let ev = [
             Event::PointerMoved(pos2(300.0, 150.0)),
@@ -892,17 +988,61 @@ mod tests {
             },
         ];
         let out = s.process(&frame(&ev, Modifiers::NONE, true));
-        let want = (LINE_POINTS / 200.0) as f64;
+        // Pointer move, then the gesture opens; nothing scrolls yet.
         assert_eq!(
             out[1],
-            InputEvent::Scroll {
+            InputEvent::ScrollGesture {
+                phase: ScrollPhase::Began,
                 x: 0.5,
-                y: 0.5,
-                dx: 0.0,
-                dy: want
+                y: 0.5
             }
         );
-        assert!(!s.gesture_open());
+        assert!(s.gliding());
+        let want = (LINE_POINTS / 200.0) as f64;
+        let (mut sum, mut ended) = (0.0, false);
+        let mut t = 1.0;
+        while t < 2.0 && !ended {
+            t += 1.0 / 60.0;
+            for e in s.tick(t) {
+                match e {
+                    InputEvent::Scroll { dx, dy, .. } => {
+                        assert_eq!(dx, 0.0);
+                        assert!(dy > 0.0);
+                        sum += dy;
+                    }
+                    InputEvent::ScrollGesture {
+                        phase: ScrollPhase::Ended,
+                        ..
+                    } => ended = true,
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+        assert!(ended && !s.gliding());
+        assert!((sum - want).abs() < 1e-9, "sum {sum} want {want}");
+    }
+
+    #[test]
+    fn release_all_flushes_a_glide_and_ends_it() {
+        let mut s = InputState::default();
+        let ev = [Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        }];
+        s.process(&frame(&ev, Modifiers::NONE, true));
+        let out = s.release_all();
+        assert!(matches!(out[0], InputEvent::Scroll { .. }));
+        assert!(matches!(
+            out[1],
+            InputEvent::ScrollGesture {
+                phase: ScrollPhase::Ended,
+                ..
+            }
+        ));
+        assert!(!s.gliding());
     }
 
     #[test]

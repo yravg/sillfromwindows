@@ -82,6 +82,8 @@ cargo build --release -p sill-app
 3. The UI parity pass (bar, thumbnails, Settings, Apps drawer, Segoe UI, vector icons).
 4. Desktop displays (kind 47) and the window-list fields.
 5. The version line in Settings.
+7. Wheel glide, ported from upstream PR #207 (see `WindowsClient/CHANGELOG.md`); not yet tried live.
+   Not ported: #207's window-placement memory (a candidate) and its C#/Media Foundation stack; #168 (Java/Swing, never run on Windows) has nothing to take.
 6. The handoff pack: `AGENTS.md`, this file, `AGENT.md`, `WindowsClient/AGENTS.md` and mock
    screenshots under `docs/windows-client/screenshots/`.
 

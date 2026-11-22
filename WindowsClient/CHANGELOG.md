@@ -1,6 +1,9 @@
 # Changelog: Sill for Windows
 
 ## Unreleased
+- Input: a mouse-wheel notch now eases out over a few frames inside a scroll gesture (began, deltas,
+  ended) instead of one jump, as jericho0521's Windows client does (Saffsanity/sill PR #207,
+  WheelGlide.cs; idea and constants credited in `input.rs`). Not yet tried against a live Mac.
 - Repository: synced to upstream Sill `main` `c33d105` (2026-11-20, Sill 0.6.3). See
   `docs/windows-client/upstream-sync.md`.
 - UI: the stream screen follows the iPad's metrics and look — an 86 pt (78 compact) bar with 66 pt

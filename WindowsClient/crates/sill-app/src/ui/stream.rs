@@ -299,7 +299,9 @@ impl StreamUi {
         for e in out {
             let _ = tx.send(Command::Input(e));
         }
-        if self.input.gesture_open() {
+        if self.input.gliding() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        } else if self.input.gesture_open() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if keys_active {
